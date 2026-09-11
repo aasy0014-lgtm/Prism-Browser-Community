@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto'
-import { createReadStream, createWriteStream } from 'node:fs'
+import { createWriteStream } from 'node:fs'
 import { constants } from 'node:fs'
 import { appendFile, lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
@@ -379,9 +379,16 @@ export class WorkspaceMigrationManager {
     const source = resolve(sourceInput)
     const sourceInfo = await lstat(source)
     if (!sourceInfo.isFile() || sourceInfo.isSymbolicLink() || sourceInfo.size < MAGIC.length + 4 + AUTH_TAG_BYTES) throw new Error('迁移包文件无效')
-    const handle = await open(source, 'r')
+    const handle = await open(source, READ_ONLY_NOFOLLOW)
     let headerBytes: Buffer; let header: ArchiveHeader; let payloadOffset: number; let authTag: Buffer
+    let staging = ''
+    let manifest: ArchiveManifest | undefined
+    let fileCount = 0
+    let totalBytes = 0
     try {
+      const openedInfo = await handle.stat()
+      if (!openedInfo.isFile() || openedInfo.size !== sourceInfo.size
+        || openedInfo.dev !== sourceInfo.dev || openedInfo.ino !== sourceInfo.ino) throw new Error('迁移包文件无效')
       const prefix = Buffer.alloc(MAGIC.length + 4)
       await readExactAt(handle, prefix, 0)
       if (!prefix.subarray(0, MAGIC.length).equals(MAGIC)) throw new Error('不是受支持的 Prism 全部环境迁移包')
@@ -397,46 +404,49 @@ export class WorkspaceMigrationManager {
       if (sourceInfo.size <= payloadOffset + AUTH_TAG_BYTES) throw new Error('迁移包缺少加密内容')
       authTag = Buffer.alloc(AUTH_TAG_BYTES)
       await readExactAt(handle, authTag, sourceInfo.size - AUTH_TAG_BYTES)
-    } finally { await handle.close() }
-    const salt = Buffer.from(header!.kdf.salt, 'base64'); const nonce = Buffer.from(header!.nonce, 'base64'); const expectedCheck = Buffer.from(header!.keyCheck, 'base64')
-    if (salt.length !== 16 || nonce.length !== 12 || expectedCheck.length !== 16) throw new Error('迁移包加密参数无效')
-    const key = await deriveKey(password, salt)
-    if (!timingSafeEqual(keyCheck(key), expectedCheck)) { key.fill(0); throw new Error('迁移密码错误') }
-    const staging = await mkdtemp(join(this.profiles.vaultPath, '.migration-import-'))
-    const decipher = createDecipheriv('aes-256-gcm', key, nonce)
-    decipher.setAAD(headerBytes!); decipher.setAuthTag(authTag!)
-    const reader = new DecryptedReader(createReadStream(source, { start: payloadOffset!, end: sourceInfo.size - AUTH_TAG_BYTES - 1 }).pipe(decipher))
-    let manifest: ArchiveManifest; let fileCount = 0; let totalBytes = 0
-    const digest = createHash('sha256')
-    const paths = new Set<string>()
-    try {
-      const first = await readRecordHeader(reader)
-      if (first.type !== 'manifest' || !Number.isSafeInteger(first.size) || first.size! < 1 || first.size! > MAX_MANIFEST_BYTES) throw new Error('迁移包缺少有效清单')
-      try { manifest = validateManifest(JSON.parse((await reader.readExactly(first.size!)).toString('utf8'))) } catch (error) {
-        if (error instanceof SyntaxError) throw new Error('迁移包清单不是有效 JSON'); throw error
-      }
-      if (manifest.profiles.length !== header!.profileCount) throw new Error('迁移包环境数量与包头不一致')
-      while (true) {
-        const record = await readRecordHeader(reader)
-        if (record.type === 'end') {
-          if (record.fileCount !== fileCount || record.totalBytes !== totalBytes || record.contentSha256 !== digest.digest('hex')) throw new Error('迁移包内容摘要不一致，文件可能已损坏')
-          break
+      const salt = Buffer.from(header!.kdf.salt, 'base64'); const nonce = Buffer.from(header!.nonce, 'base64'); const expectedCheck = Buffer.from(header!.keyCheck, 'base64')
+      if (salt.length !== 16 || nonce.length !== 12 || expectedCheck.length !== 16) throw new Error('迁移包加密参数无效')
+      const key = await deriveKey(password, salt)
+      if (!timingSafeEqual(keyCheck(key), expectedCheck)) { key.fill(0); throw new Error('迁移密码错误') }
+      staging = await mkdtemp(join(this.profiles.vaultPath, '.migration-import-'))
+      const decipher = createDecipheriv('aes-256-gcm', key, nonce)
+      decipher.setAAD(headerBytes!); decipher.setAuthTag(authTag!)
+      const payload = handle.createReadStream({ start: payloadOffset!, end: sourceInfo.size - AUTH_TAG_BYTES - 1, autoClose: false })
+      const reader = new DecryptedReader(payload.pipe(decipher))
+      const digest = createHash('sha256')
+      const paths = new Set<string>()
+      try {
+        const first = await readRecordHeader(reader)
+        if (first.type !== 'manifest' || !Number.isSafeInteger(first.size) || first.size! < 1 || first.size! > MAX_MANIFEST_BYTES) throw new Error('迁移包缺少有效清单')
+        try { manifest = validateManifest(JSON.parse((await reader.readExactly(first.size!)).toString('utf8'))) } catch (error) {
+          if (error instanceof SyntaxError) throw new Error('迁移包清单不是有效 JSON'); throw error
         }
-        if (record.type !== 'file' || typeof record.path !== 'string' || !Number.isSafeInteger(record.size)
-          || record.size! < 0 || record.size! > MAX_BYTES) throw new Error('迁移包文件记录无效')
-        if (paths.has(record.path)) throw new Error('迁移包包含重复的文件路径')
-        paths.add(record.path)
-        fileCount += 1; totalBytes += record.size!
-        if (fileCount > MAX_FILES || totalBytes > MAX_BYTES) throw new Error('迁移包内容超过安全限制')
-        digest.update(record.path).update('\0').update(String(record.size)).update('\0')
-        await reader.copyExactly(record.size!, safeArchivePath(staging, record.path), digest)
+        if (manifest.profiles.length !== header!.profileCount) throw new Error('迁移包环境数量与包头不一致')
+        while (true) {
+          const record = await readRecordHeader(reader)
+          if (record.type === 'end') {
+            if (record.fileCount !== fileCount || record.totalBytes !== totalBytes || record.contentSha256 !== digest.digest('hex')) throw new Error('迁移包内容摘要不一致，文件可能已损坏')
+            break
+          }
+          if (record.type !== 'file' || typeof record.path !== 'string' || !Number.isSafeInteger(record.size)
+            || record.size! < 0 || record.size! > MAX_BYTES) throw new Error('迁移包文件记录无效')
+          if (paths.has(record.path)) throw new Error('迁移包包含重复的文件路径')
+          paths.add(record.path)
+          fileCount += 1; totalBytes += record.size!
+          if (fileCount > MAX_FILES || totalBytes > MAX_BYTES) throw new Error('迁移包内容超过安全限制')
+          digest.update(record.path).update('\0').update(String(record.size)).update('\0')
+          await reader.copyExactly(record.size!, safeArchivePath(staging, record.path), digest)
+        }
+        await reader.ensureEnd()
+      } catch (error) {
+        await rm(staging, { recursive: true, force: true })
+        if ((error as Error).message.includes('authenticate data')) throw new Error('迁移密码错误或迁移包已损坏')
+        throw error
+      } finally {
+        payload.destroy()
+        key.fill(0)
       }
-      await reader.ensureEnd()
-    } catch (error) {
-      await rm(staging, { recursive: true, force: true })
-      if ((error as Error).message.includes('authenticate data')) throw new Error('迁移密码错误或迁移包已损坏')
-      throw error
-    } finally { key.fill(0) }
+    } finally { await handle.close().catch(() => undefined) }
 
     const usedNames = new Set(this.profiles.list().map((profile) => profile.name))
     let renamedCount = 0; let skippedCount = 0

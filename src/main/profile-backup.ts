@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual, type Hash } from 'node:crypto'
-import { createReadStream, createWriteStream } from 'node:fs'
+import { createWriteStream } from 'node:fs'
 import { constants } from 'node:fs'
 import { appendFile, lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
@@ -354,12 +354,17 @@ export class ProfileBackupManager {
       throw new Error('加密备份文件无效')
     }
 
-    const handle = await open(source, 'r')
+    const handle = await open(source, READ_ONLY_NOFOLLOW)
     let headerBytes: Buffer | undefined
     let header: ProfileBackupHeader | undefined
     let payloadOffset = 0
     let authTag: Buffer | undefined
     try {
+      const openedInfo = await handle.stat()
+      if (!openedInfo.isFile() || openedInfo.size !== sourceInfo.size
+        || openedInfo.dev !== sourceInfo.dev || openedInfo.ino !== sourceInfo.ino) {
+        throw new Error('加密备份文件无效')
+      }
       const prefix = Buffer.alloc(MAGIC.length + 4)
       await readExactAt(handle, prefix, 0)
       if (!prefix.subarray(0, MAGIC.length).equals(MAGIC)) throw new Error('不是受支持的加密环境备份')
@@ -375,94 +380,96 @@ export class ProfileBackupManager {
       if (sourceInfo.size <= payloadOffset + AUTH_TAG_BYTES) throw new Error('备份文件缺少加密内容')
       authTag = Buffer.alloc(AUTH_TAG_BYTES)
       await readExactAt(handle, authTag, sourceInfo.size - AUTH_TAG_BYTES)
-    } finally {
-      await handle.close()
-    }
-
-    const salt = Buffer.from(header!.kdf.salt, 'base64')
-    const nonce = Buffer.from(header!.nonce, 'base64')
-    const expectedCheck = Buffer.from(header!.keyCheck, 'base64')
-    if (salt.length !== 16 || nonce.length !== 12 || expectedCheck.length !== 16) throw new Error('备份文件加密参数无效')
-    const key = await deriveKey(password, salt)
-    if (!timingSafeEqual(keyCheck(key), expectedCheck)) {
-      key.fill(0)
-      throw new Error('备份密码错误')
-    }
-
-    const stagingRoot = await mkdtemp(join(this.profiles.vaultPath, '.profile-backup-import-'))
-    const staging = join(stagingRoot, 'user-data')
-    await mkdir(staging, { recursive: true })
-    const decipher = createDecipheriv('aes-256-gcm', key, nonce)
-    decipher.setAAD(headerBytes!)
-    decipher.setAuthTag(authTag!)
-    const reader = new DecryptedReader(createReadStream(source, {
-      start: payloadOffset,
-      end: sourceInfo.size - AUTH_TAG_BYTES - 1
-    }).pipe(decipher))
-    const digest = createHash('sha256')
-    let manifest: ProfileBackupManifest | undefined
-    let fileCount = 0
-    let totalBytes = 0
-    const paths = new Set<string>()
-    let profile: BrowserProfile | undefined
-    try {
-      const first = await readRecordHeader(reader)
-      if (first.type !== 'manifest' || !Number.isSafeInteger(first.size) || first.size! < 1 || first.size! > MAX_MANIFEST_BYTES) {
-        throw new Error('备份缺少有效清单')
-      }
-      try { manifest = validateManifest(JSON.parse((await reader.readExactly(first.size!)).toString('utf8'))) } catch (error) {
-        if (error instanceof SyntaxError) throw new Error('备份清单不是有效 JSON')
-        throw error
+      const salt = Buffer.from(header!.kdf.salt, 'base64')
+      const nonce = Buffer.from(header!.nonce, 'base64')
+      const expectedCheck = Buffer.from(header!.keyCheck, 'base64')
+      if (salt.length !== 16 || nonce.length !== 12 || expectedCheck.length !== 16) throw new Error('备份文件加密参数无效')
+      const key = await deriveKey(password, salt)
+      if (!timingSafeEqual(keyCheck(key), expectedCheck)) {
+        key.fill(0)
+        throw new Error('备份密码错误')
       }
 
-      while (true) {
-        const record = await readRecordHeader(reader)
-        if (record.type === 'end') {
-          if (record.fileCount !== fileCount || record.totalBytes !== totalBytes || record.contentSha256 !== digest.digest('hex')) {
-            throw new Error('备份内容摘要或数量校验失败')
-          }
-          await reader.ensureEnd()
-          break
-        }
-        const size = record.size
-        if (record.type !== 'file' || typeof record.path !== 'string' || typeof size !== 'number' || !Number.isSafeInteger(size)
-          || size < 0 || size > MAX_BACKUP_BYTES) throw new Error('备份文件记录无效')
-        const archivePath = record.path
-        if (paths.has(archivePath)) throw new Error('备份包含重复的文件路径')
-        paths.add(archivePath)
-        fileCount += 1
-        totalBytes += size
-        if (fileCount > MAX_BACKUP_FILES || totalBytes > MAX_BACKUP_BYTES) throw new Error('备份数据超过安全限制')
-        const target = safeArchivePath(staging, archivePath)
-        digest.update(archivePath).update('\0').update(String(size)).update('\0')
-        await reader.copyExactly(size, target, digest)
-      }
-
-      const draft = manifest!.profile
-      profile = await this.profiles.create(draft)
-      const target = this.profiles.profileDataPath(profile.id)
-      const empty = `${target}.empty-${randomUUID()}`
-      await rename(target, empty)
+      const stagingRoot = await mkdtemp(join(this.profiles.vaultPath, '.profile-backup-import-'))
+      const staging = join(stagingRoot, 'user-data')
+      await mkdir(staging, { recursive: true })
+      const decipher = createDecipheriv('aes-256-gcm', key, nonce)
+      decipher.setAAD(headerBytes!)
+      decipher.setAuthTag(authTag!)
+      const payload = handle.createReadStream({
+        start: payloadOffset,
+        end: sourceInfo.size - AUTH_TAG_BYTES - 1,
+        autoClose: false
+      })
+      const reader = new DecryptedReader(payload.pipe(decipher))
+      const digest = createHash('sha256')
+      let manifest: ProfileBackupManifest | undefined
+      let fileCount = 0
+      let totalBytes = 0
+      const paths = new Set<string>()
+      let profile: BrowserProfile | undefined
       try {
-        await rename(staging, target)
-        await rm(empty, { recursive: true, force: true })
+        const first = await readRecordHeader(reader)
+        if (first.type !== 'manifest' || !Number.isSafeInteger(first.size) || first.size! < 1 || first.size! > MAX_MANIFEST_BYTES) {
+          throw new Error('备份缺少有效清单')
+        }
+        try { manifest = validateManifest(JSON.parse((await reader.readExactly(first.size!)).toString('utf8'))) } catch (error) {
+          if (error instanceof SyntaxError) throw new Error('备份清单不是有效 JSON')
+          throw error
+        }
+
+        while (true) {
+          const record = await readRecordHeader(reader)
+          if (record.type === 'end') {
+            if (record.fileCount !== fileCount || record.totalBytes !== totalBytes || record.contentSha256 !== digest.digest('hex')) {
+              throw new Error('备份内容摘要或数量校验失败')
+            }
+            await reader.ensureEnd()
+            break
+          }
+          const size = record.size
+          if (record.type !== 'file' || typeof record.path !== 'string' || typeof size !== 'number' || !Number.isSafeInteger(size)
+            || size < 0 || size > MAX_BACKUP_BYTES) throw new Error('备份文件记录无效')
+          const archivePath = record.path
+          if (paths.has(archivePath)) throw new Error('备份包含重复的文件路径')
+          paths.add(archivePath)
+          fileCount += 1
+          totalBytes += size
+          if (fileCount > MAX_BACKUP_FILES || totalBytes > MAX_BACKUP_BYTES) throw new Error('备份数据超过安全限制')
+          const target = safeArchivePath(staging, archivePath)
+          digest.update(archivePath).update('\0').update(String(size)).update('\0')
+          await reader.copyExactly(size, target, digest)
+        }
+
+        const draft = manifest!.profile
+        profile = await this.profiles.create(draft)
+        const target = this.profiles.profileDataPath(profile.id)
+        const empty = `${target}.empty-${randomUUID()}`
+        await rename(target, empty)
+        try {
+          await rename(staging, target)
+          await rm(empty, { recursive: true, force: true })
+        } catch (error) {
+          await rename(empty, target).catch(() => undefined)
+          throw error
+        }
+        await this.profiles.assertProfileDataIdentity(profile.id)
+        this.logger?.info('环境加密完整数据备份已导入', { profileId: profile.id, bytes: totalBytes, files: fileCount })
+        return { profile: this.profiles.get(profile.id), result: { path: source, totalBytes, fileCount } }
       } catch (error) {
-        await rename(empty, target).catch(() => undefined)
+        if (profile) {
+          await this.profiles.remove(profile.id).catch(() => undefined)
+          const item = (await this.profiles.listTrash().catch(() => [])).find((candidate) => candidate.profileId === profile!.id)
+          if (item) await this.profiles.purgeTrash(item.trashId).catch(() => undefined)
+        }
         throw error
+      } finally {
+        payload.destroy()
+        key.fill(0)
+        await rm(stagingRoot, { recursive: true, force: true })
       }
-      await this.profiles.assertProfileDataIdentity(profile.id)
-      this.logger?.info('环境加密完整数据备份已导入', { profileId: profile.id, bytes: totalBytes, files: fileCount })
-      return { profile: this.profiles.get(profile.id), result: { path: source, totalBytes, fileCount } }
-    } catch (error) {
-      if (profile) {
-        await this.profiles.remove(profile.id).catch(() => undefined)
-        const item = (await this.profiles.listTrash().catch(() => [])).find((candidate) => candidate.profileId === profile!.id)
-        if (item) await this.profiles.purgeTrash(item.trashId).catch(() => undefined)
-      }
-      throw error
     } finally {
-      key.fill(0)
-      await rm(stagingRoot, { recursive: true, force: true })
+      await handle.close().catch(() => undefined)
     }
   }
 }

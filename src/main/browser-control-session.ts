@@ -1,3 +1,4 @@
+import { BlockList, isIP } from 'node:net'
 import type { Readable, Writable } from 'node:stream'
 
 const MAX_PAGE_NODES = 300
@@ -8,6 +9,44 @@ const ACTIONABLE_ROLES = new Set([
   'searchbox', 'slider', 'spinbutton', 'switch', 'tab', 'textbox'
 ])
 const EDITABLE_ROLES = new Set(['combobox', 'searchbox', 'spinbutton', 'textbox'])
+
+const BLOCKED_IPV4 = new BlockList()
+for (const [address, prefix] of [
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
+  ['192.0.2.0', 24],
+  ['192.168.0.0', 16],
+  ['198.18.0.0', 15],
+  ['198.51.100.0', 24],
+  ['203.0.113.0', 24],
+  ['224.0.0.0', 4],
+  ['240.0.0.0', 4]
+] as const) BLOCKED_IPV4.addSubnet(address, prefix, 'ipv4')
+
+const BLOCKED_IPV6 = new BlockList()
+for (const [address, prefix] of [
+  ['::', 128],
+  ['::1', 128],
+  ['2001:db8::', 32],
+  ['fc00::', 7],
+  ['fe80::', 10],
+  ['fec0::', 10],
+  ['ff00::', 8]
+] as const) BLOCKED_IPV6.addSubnet(address, prefix, 'ipv6')
+
+const BLOCKED_HOSTNAMES = new Set(['localhost', 'local', 'metadata.google.internal'])
+
+class BlockedNavigationError extends Error {
+  constructor(message = 'MCP 不允许访问本地或元数据服务地址') {
+    super(message)
+    this.name = 'BlockedNavigationError'
+  }
+}
 
 interface PendingCommand {
   resolve: (value: unknown) => void
@@ -130,17 +169,64 @@ function boundedText(value: unknown, maximum = 500): string {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, maximum) : ''
 }
 
+function parseIpv6Words(value: string): number[] | undefined {
+  let normalized = value.toLowerCase()
+  if (normalized.includes('.')) {
+    const separator = normalized.lastIndexOf(':')
+    if (separator < 0) return undefined
+    const octets = normalized.slice(separator + 1).split('.').map(Number)
+    if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return undefined
+    const high = ((octets[0] << 8) | octets[1]).toString(16)
+    const low = ((octets[2] << 8) | octets[3]).toString(16)
+    normalized = `${normalized.slice(0, separator)}:${high}:${low}`
+  }
+  const sections = normalized.split('::')
+  if (sections.length > 2) return undefined
+  const parseSection = (section: string): number[] => section
+    ? section.split(':').map((part) => part.length > 0 && part.length <= 4 && /^[\da-f]+$/i.test(part) ? Number.parseInt(part, 16) : Number.NaN)
+    : []
+  const left = parseSection(sections[0])
+  const right = sections.length === 2 ? parseSection(sections[1]) : []
+  if ([...left, ...right].some((part) => !Number.isInteger(part) || part < 0 || part > 0xffff)) return undefined
+  if (sections.length === 1) return left.length === 8 ? left : undefined
+  const missing = 8 - left.length - right.length
+  return missing > 0 ? [...left, ...Array.from({ length: missing }, () => 0), ...right] : undefined
+}
+
+function mappedIpv4(value: string): string | undefined {
+  const words = parseIpv6Words(value)
+  if (!words || words.length !== 8 || !words.slice(0, 5).every((word) => word === 0) || words[5] !== 0xffff) return undefined
+  return `${words[6] >>> 8}.${words[6] & 0xff}.${words[7] >>> 8}.${words[7] & 0xff}`
+}
+
+function isRestrictedHost(hostValue: string): boolean {
+  const host = hostValue.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
+  if (BLOCKED_HOSTNAMES.has(host) || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) return true
+  const family = isIP(host)
+  if (family === 4) return BLOCKED_IPV4.check(host, 'ipv4')
+  if (family === 6) {
+    if (BLOCKED_IPV6.check(host, 'ipv6')) return true
+    const mapped = mappedIpv4(host)
+    return mapped ? BLOCKED_IPV4.check(mapped, 'ipv4') : false
+  }
+  return false
+}
+
 function validateWebUrl(value: string): string {
   if (typeof value !== 'string' || value.length < 1 || value.length > 2_048) throw new Error('网址长度无效')
   const url = new URL(value)
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('MCP 只允许打开 HTTP 或 HTTPS 网页')
   if (url.username || url.password) throw new Error('网址中不能包含账号或密码')
-  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '')
-  if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.startsWith('127.')
-    || host === '169.254.169.254' || host === 'metadata.google.internal') {
-    throw new Error('MCP 不允许访问本地或元数据服务地址')
-  }
+  if (isRestrictedHost(url.hostname)) throw new BlockedNavigationError()
   return url.toString()
+}
+
+function validateLoadedUrl(value: string): void {
+  if (value === 'about:blank') return
+  let url: URL
+  try { url = new URL(value) } catch { throw new BlockedNavigationError('MCP 只允许读取 HTTP 或 HTTPS 网页') }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new BlockedNavigationError('MCP 只允许读取 HTTP 或 HTTPS 网页')
+  if (url.username || url.password || isRestrictedHost(url.hostname)) throw new BlockedNavigationError()
 }
 
 function delay(milliseconds: number): Promise<void> {
@@ -318,8 +404,10 @@ export class BrowserControlSession {
       returnByValue: true
     }, this.sessionId)
     if (result.exceptionDetails) throw new Error('无法读取当前页面状态')
+    const url = boundedText(result.result?.value?.url, 2_048)
+    validateLoadedUrl(url)
     return {
-      url: boundedText(result.result?.value?.url, 2_048),
+      url,
       title: boundedText(result.result?.value?.title, 500),
       readyState: boundedText(result.result?.value?.readyState, 40) || 'unknown'
     }
@@ -327,7 +415,10 @@ export class BrowserControlSession {
 
   private async waitForDocument(): Promise<void> {
     for (let attempt = 0; attempt < 150; attempt += 1) {
-      const state = await this.pageState().catch(() => null)
+      const state = await this.pageState().catch((error) => {
+        if (error instanceof BlockedNavigationError) throw error
+        return null
+      })
       if (state?.readyState === 'complete' && state.url && state.url !== 'about:blank') return
       await delay(100)
     }

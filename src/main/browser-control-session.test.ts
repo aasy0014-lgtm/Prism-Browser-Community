@@ -70,12 +70,33 @@ describe('BrowserControlSession', () => {
     ])
   })
 
-  it('rejects loopback, internal and cloud metadata URLs for MCP operations', async () => {
+  it('rejects loopback, private, reserved and cloud metadata URLs for MCP operations', async () => {
     const cdp: CdpTransport = { send: vi.fn(), close: vi.fn() }
     const session = new BrowserControlSession(cdp)
 
     await expect(session.open('http://127.0.0.1:8080/')).rejects.toThrow('MCP 不允许访问本地或元数据服务地址')
     await expect(session.open('http://localhost:3000/')).rejects.toThrow('MCP 不允许访问本地或元数据服务地址')
+    await expect(session.open('http://2130706433/')).rejects.toThrow('MCP 不允许访问本地或元数据服务地址')
+    await expect(session.open('http://10.0.0.1/')).rejects.toThrow('MCP 不允许访问本地或元数据服务地址')
+    await expect(session.open('http://192.168.1.1/')).rejects.toThrow('MCP 不允许访问本地或元数据服务地址')
+    await expect(session.open('http://[fd00::1]/')).rejects.toThrow('MCP 不允许访问本地或元数据服务地址')
+    await expect(session.open('http://[::ffff:127.0.0.1]/')).rejects.toThrow('MCP 不允许访问本地或元数据服务地址')
     await expect(session.open('http://169.254.169.254/latest/meta-data/')).rejects.toThrow('MCP 不允许访问本地或元数据服务地址')
+  })
+
+  it('rejects a page that redirects to a local or non-web URL before exposing state', async () => {
+    const send = vi.fn(async <T>(method: string): Promise<T> => {
+      if (method === 'Target.createTarget') return { targetId: 'target-1' } as T
+      if (method === 'Target.attachToTarget') return { sessionId: 'session-1' } as T
+      if (method === 'Target.getTargetInfo') return { targetInfo: { targetId: 'target-1' } } as T
+      if (method === 'Page.navigate') return {} as T
+      if (method === 'Runtime.evaluate') {
+        return { result: { value: { url: 'http://192.168.0.1/admin', title: 'internal', readyState: 'complete' } } } as T
+      }
+      return {} as T
+    })
+    const session = new BrowserControlSession({ send: send as CdpTransport['send'], close: vi.fn() })
+
+    await expect(session.open('https://example.com/redirect')).rejects.toThrow('MCP 不允许访问本地或元数据服务地址')
   })
 })
