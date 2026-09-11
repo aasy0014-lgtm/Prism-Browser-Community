@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import { lstat, open, readdir } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { readStableText } from './atomic-file'
 
 export interface KernelCriticalFile {
   path: string
@@ -61,24 +62,7 @@ async function isNonEmptyFile(path: string): Promise<boolean> {
 /** Read small metadata through the opened handle, not through a replaceable path. */
 export async function readStableTextFile(path: string, maximum = MAX_TEXT_FILE_BYTES): Promise<string> {
   if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > MAX_TEXT_FILE_BYTES) throw new Error('内核元数据大小限制无效')
-  const initial = await lstat(path)
-  if (!initial.isFile() || initial.isSymbolicLink() || initial.size < 1 || initial.size > maximum) {
-    throw new Error('内核元数据文件无效')
-  }
-  const handle = await open(path, READ_ONLY_NOFOLLOW)
-  try {
-    const opened = await handle.stat()
-    if (!opened.isFile() || opened.isSymbolicLink() || opened.size !== initial.size
-      || opened.dev !== initial.dev || opened.ino !== initial.ino) throw new Error('内核元数据在读取期间发生变化')
-    const buffer = Buffer.alloc(maximum + 1)
-    const { bytesRead } = await handle.read({ buffer, position: 0 })
-    if (bytesRead > maximum || bytesRead !== opened.size) throw new Error('内核元数据在读取期间发生变化')
-    const final = await handle.stat()
-    if (!final.isFile() || final.isSymbolicLink() || final.size !== opened.size) throw new Error('内核元数据在读取期间发生变化')
-    return buffer.subarray(0, bytesRead).toString('utf8')
-  } finally {
-    await handle.close().catch(() => undefined)
-  }
+  return readStableText(path, maximum)
 }
 
 /** Hash the opened file handle so a path replacement cannot change the bytes mid-check. */

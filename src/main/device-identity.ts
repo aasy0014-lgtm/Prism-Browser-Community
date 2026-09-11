@@ -6,9 +6,9 @@ import {
   sign,
   verify
 } from 'node:crypto'
-import { mkdir, readFile } from 'node:fs/promises'
+import { mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { writeAtomicJson } from './atomic-file'
+import { readStableText, writeAtomicJson } from './atomic-file'
 
 export interface DeviceKeyProtector {
   protect(value: string): string
@@ -55,7 +55,7 @@ export class DeviceIdentityStore {
 
   async loadOrCreate(): Promise<DeviceIdentity> {
     try {
-      const value = JSON.parse(await readFile(this.path, 'utf8')) as Partial<StoredDeviceIdentity>
+      const value = JSON.parse(await readStableText(this.path, 1024 * 1024)) as Partial<StoredDeviceIdentity>
       if (value.schemaVersion !== 1 || typeof value.publicKey !== 'string'
         || typeof value.protectedPrivateKey !== 'string' || typeof value.createdAt !== 'string'
         || !Number.isFinite(Date.parse(value.createdAt))) {

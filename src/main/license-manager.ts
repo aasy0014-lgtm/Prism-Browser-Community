@@ -1,9 +1,9 @@
 import { createHash, createPrivateKey, createPublicKey, randomBytes, sign } from 'node:crypto'
-import { access, mkdir, readFile, rm } from 'node:fs/promises'
+import { access, mkdir, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { LicenseStatus, ProEntitlement } from '../shared/types'
 import type { Logger } from './app-logger'
-import { writeAtomicJson } from './atomic-file'
+import { readStableText, writeAtomicJson } from './atomic-file'
 import { DeviceIdentityStore, type DeviceKeyProtector } from './device-identity'
 import {
   canonicalJson,
@@ -188,7 +188,7 @@ export class LicenseManager {
     this.startLeaseMonitor()
 
     try {
-      const certificate: unknown = JSON.parse(await readFile(this.certificatePath, 'utf8'))
+      const certificate: unknown = JSON.parse(await readStableText(this.certificatePath, 1024 * 1024))
       const identity = await this.identities.loadOrCreate()
       try {
         const verified = verifyLicenseCertificate(certificate, identity.deviceId, this.config.licensePublicKey, new Date(this.now()))
@@ -297,7 +297,7 @@ export class LicenseManager {
     const config = this.config ?? await this.readConfig()
     this.config = config
     const identity = await this.identities.loadOrCreate()
-    const certificate: unknown = JSON.parse(await readFile(this.certificatePath, 'utf8'))
+    const certificate: unknown = JSON.parse(await readStableText(this.certificatePath, 1024 * 1024))
     const verified = verifyLicenseCertificate(certificate, identity.deviceId, config.licensePublicKey, new Date(this.now()))
     const payload = {
       schemaVersion: 1 as const,
@@ -351,7 +351,7 @@ export class LicenseManager {
     const config = this.config ?? await this.readConfig()
     this.config = config
     const identity = await this.identities.loadOrCreate()
-    const certificate = JSON.parse(await readFile(this.certificatePath, 'utf8')) as SignedLicenseCertificate
+    const certificate = JSON.parse(await readStableText(this.certificatePath, 1024 * 1024)) as SignedLicenseCertificate
     verifyLicenseCertificate(certificate, identity.deviceId, config.licensePublicKey, new Date(this.now()))
     const payload: ProAgentHandshake['payload'] = {
       schemaVersion: 1,
@@ -376,7 +376,7 @@ export class LicenseManager {
   private async readConfig(): Promise<LicenseConfig> {
     const path = this.configOverride ?? join(this.resourcesPath, 'license-config.json')
     await access(path)
-    return validateConfig(JSON.parse(await readFile(path, 'utf8')))
+    return validateConfig(JSON.parse(await readStableText(path, 1024 * 1024)))
   }
 
   private async postJson<T>(url: string, body: unknown): Promise<T> {
@@ -425,7 +425,7 @@ export class LicenseManager {
       const config = this.config ?? await this.readConfig()
       this.config = config
       const identity = await this.identities.loadOrCreate()
-      const certificate = JSON.parse(await readFile(this.certificatePath, 'utf8')) as SignedLicenseCertificate
+      const certificate = JSON.parse(await readStableText(this.certificatePath, 1024 * 1024)) as SignedLicenseCertificate
       const verified = verifyLicenseCertificate(certificate, identity.deviceId, config.licensePublicKey, new Date(this.now()))
       const payload = {
         schemaVersion: 1 as const,
@@ -480,7 +480,7 @@ export class LicenseManager {
   private async maintainLease(): Promise<LicenseStatus> {
     let certificate: unknown
     try {
-      certificate = JSON.parse(await readFile(this.certificatePath, 'utf8'))
+      certificate = JSON.parse(await readStableText(this.certificatePath, 1024 * 1024))
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return this.status()
       throw error

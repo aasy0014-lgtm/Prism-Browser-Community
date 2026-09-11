@@ -1,5 +1,6 @@
-import { mkdir, rename, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, rename } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { appendPrivateText } from './atomic-file'
 
 export interface SchedulerAuditEvent {
   action: 'task-create' | 'task-update' | 'task-enable' | 'task-disable' | 'task-remove' | 'task-run' | 'task-skip'
@@ -21,11 +22,13 @@ export class SchedulerAuditLog {
   async initialize(): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true })
     try {
-      if ((await stat(this.path)).size >= 10 * 1024 * 1024) await rename(this.path, `${this.path}.previous`)
+      const info = await lstat(this.path)
+      if (info.isSymbolicLink() || !info.isFile()) throw new Error('计划审计日志无效')
+      if (info.size >= 10 * 1024 * 1024) await rename(this.path, `${this.path}.previous`)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
-    await writeFile(this.path, '', { flag: 'a', mode: 0o600 })
+    await appendPrivateText(this.path, '')
   }
 
   record(event: SchedulerAuditEvent): void {
@@ -37,7 +40,7 @@ export class SchedulerAuditLog {
       profileId: event.profileId?.slice(0, 100),
       detail: event.detail?.slice(0, 300)
     }
-    this.queue = this.queue.then(() => writeFile(this.path, `${JSON.stringify(safe)}\n`, { flag: 'a', encoding: 'utf8', mode: 0o600 }))
+    this.queue = this.queue.then(() => appendPrivateText(this.path, `${JSON.stringify(safe)}\n`))
       .catch(() => undefined)
   }
 

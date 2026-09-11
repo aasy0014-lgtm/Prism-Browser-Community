@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { access, cp, lstat, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { access, cp, lstat, mkdir, readdir, rename, rm } from 'node:fs/promises'
 import { basename, join, resolve, sep } from 'node:path'
 import type { BrowserExtension } from '../shared/types'
 import type { Logger } from './app-logger'
-import { writeAtomicJson } from './atomic-file'
+import { readStableText, writeAtomicJson } from './atomic-file'
 
 interface ChromeExtensionManifest {
   manifest_version?: number
@@ -53,7 +53,7 @@ export class ExtensionStore {
         const metadataInfo = await lstat(metadataPath)
         if (!metadataInfo.isFile() || metadataInfo.isSymbolicLink()) throw new Error('扩展元数据文件无效')
         await inspectDirectory(extensionPath)
-        const metadata = JSON.parse(await readFile(metadataPath, 'utf8')) as BrowserExtension
+        const metadata = JSON.parse(await readStableText(metadataPath, 1024 * 1024)) as BrowserExtension
         if (metadata.id !== entry.name || !/^[a-f\d-]{36}$/i.test(metadata.id)) throw new Error('扩展元数据 ID 无效')
         await access(join(extensionPath, 'manifest.json'))
         this.extensions.set(metadata.id, {
@@ -100,7 +100,7 @@ export class ExtensionStore {
       const manifestInfo = await lstat(manifestPath)
       if (!manifestInfo.isFile() || manifestInfo.isSymbolicLink()) throw new Error('扩展 manifest.json 无效')
       if (manifestInfo.size > 1024 * 1024) throw new Error('扩展 manifest.json 不能超过 1 MB')
-      manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as ChromeExtensionManifest
+      manifest = JSON.parse(await readStableText(manifestPath, 1024 * 1024)) as ChromeExtensionManifest
     } catch (error) {
       if (error instanceof SyntaxError) throw new Error('扩展 manifest.json 不是有效 JSON')
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('所选目录缺少 manifest.json')
@@ -135,7 +135,7 @@ export class ExtensionStore {
         path: join(target, 'extension'),
         globalEnabled: false
       }
-      await writeFile(join(staging, 'metadata.json'), JSON.stringify(extension, null, 2), { encoding: 'utf8', mode: 0o600 })
+      await writeAtomicJson(join(staging, 'metadata.json'), extension)
       await rename(staging, target)
       this.extensions.set(id, extension)
       this.logger?.info('浏览器扩展已导入', { extensionId: id, name: extension.name, version: extension.version })

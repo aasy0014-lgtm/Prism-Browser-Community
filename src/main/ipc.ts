@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
-import { lstat, readFile, stat, writeFile } from 'node:fs/promises'
+import { lstat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ProfileDraft } from '../shared/types'
 import type { KernelManager } from './kernel-manager'
@@ -28,6 +28,7 @@ import type { SchedulerManager } from './scheduler-manager'
 import type { McpControlManager } from './mcp-control-manager'
 import type { AnnouncementManager } from './announcement-manager'
 import { assertTrustedIpcSender } from './renderer-security'
+import { readStableText, writeAtomicText } from './atomic-file'
 
 export const PRO_PURCHASE_URL = 'https://pay.ldxp.cn/item/q23itv'
 
@@ -77,7 +78,7 @@ export function registerIpc({ profiles, settings, launcher, kernels, extensions,
     }
     const result = owner ? await dialog.showSaveDialog(owner, options) : await dialog.showSaveDialog(options)
     if (result.canceled || !result.filePath) return null
-    await writeFile(result.filePath, serializeProfileConfig(profile), { encoding: 'utf8', mode: 0o600 })
+    await writeAtomicText(result.filePath, serializeProfileConfig(profile))
     logger.info('环境配置已导出', { profileId: id })
     return result.filePath
   })
@@ -91,8 +92,7 @@ export function registerIpc({ profiles, settings, launcher, kernels, extensions,
     const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
     if (result.canceled || !result.filePaths[0]) return null
     const path = result.filePaths[0]
-    if ((await stat(path)).size > 1024 * 1024) throw new Error('环境配置文件不能超过 1 MB')
-    const profile = await profiles.create(parseProfileConfig(await readFile(path, 'utf8')))
+    const profile = await profiles.create(parseProfileConfig(await readStableText(path, 1024 * 1024)))
     logger.info('环境配置已导入', { profileId: profile.id })
     return publicProfile(profile)
   })
@@ -106,8 +106,7 @@ export function registerIpc({ profiles, settings, launcher, kernels, extensions,
     const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
     if (result.canceled || !result.filePaths[0]) return null
     const path = result.filePaths[0]
-    if ((await stat(path)).size > 2 * 1024 * 1024) throw new Error('批量导入 CSV 不能超过 2 MB')
-    const drafts = parseBatchProfileCsv(await readFile(path, 'utf8'), profiles.list().length + 1)
+    const drafts = parseBatchProfileCsv(await readStableText(path, 2 * 1024 * 1024), profiles.list().length + 1)
     const created = await profiles.createMany(drafts)
     logger.info('已通过 CSV 批量导入浏览器环境', { count: created.length })
     return created.map(publicProfile)
@@ -121,7 +120,7 @@ export function registerIpc({ profiles, settings, launcher, kernels, extensions,
     }
     const result = owner ? await dialog.showSaveDialog(owner, options) : await dialog.showSaveDialog(options)
     if (result.canceled || !result.filePath) return null
-    await writeFile(result.filePath, serializeBatchProfileTemplate(), { encoding: 'utf8', mode: 0o600 })
+    await writeAtomicText(result.filePath, serializeBatchProfileTemplate())
     return result.filePath
   })
   handle('profiles:storage-info', async (_event, id: string) => {
@@ -237,7 +236,7 @@ export function registerIpc({ profiles, settings, launcher, kernels, extensions,
     const result = owner ? await dialog.showSaveDialog(owner, options) : await dialog.showSaveDialog(options)
     if (result.canceled || !result.filePath) return null
     const exported = await cookies.exportCookies(id)
-    await writeFile(result.filePath, serializeCookieFile(profile.name, exported), { encoding: 'utf8', mode: 0o600 })
+    await writeAtomicText(result.filePath, serializeCookieFile(profile.name, exported))
     return { count: exported.length, filePath: result.filePath }
   })
   handle('profiles:import-cookies', async (_event, id: string) => {
@@ -252,8 +251,7 @@ export function registerIpc({ profiles, settings, launcher, kernels, extensions,
     const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
     if (result.canceled || !result.filePaths[0]) return null
     const path = result.filePaths[0]
-    if ((await stat(path)).size > 10 * 1024 * 1024) throw new Error('Cookie 文件不能超过 10 MB')
-    const imported = parseCookieFile(await readFile(path, 'utf8'))
+    const imported = parseCookieFile(await readStableText(path, 10 * 1024 * 1024))
     const count = await cookies.importCookies(id, imported)
     return { count, filePath: path }
   })

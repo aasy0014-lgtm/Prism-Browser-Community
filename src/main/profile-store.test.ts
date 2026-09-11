@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -190,6 +190,36 @@ describe('ProfileStore', () => {
     expect(restored.tags).toEqual(['重点'])
     await expect(readFile(join(repository.profileDataPath(restored.id), 'cookie-test'), 'utf8')).resolves.toBe('preserved')
     expect(await repository.listTrash()).toHaveLength(0)
+  })
+
+  it.skipIf(process.platform === 'win32')('replaces a pre-existing recycle marker symlink without touching its target', async () => {
+    const repository = await store()
+    const profile = await repository.create(defaultProfileDraft())
+    const external = join(repository.vaultPath, 'external-marker.json')
+    const marker = join(repository.vaultPath, 'profiles', profile.id, 'deleted-profile.json')
+    await writeFile(external, 'keep me')
+    await symlink(external, marker)
+
+    await repository.remove(profile.id)
+
+    await expect(readFile(external, 'utf8')).resolves.toBe('keep me')
+    expect(await repository.listTrash()).toHaveLength(1)
+  })
+
+  it('rejects a recycle entry whose stored profile ID would escape the profile directory', async () => {
+    const repository = await store()
+    const profile = await repository.create(defaultProfileDraft())
+    await repository.remove(profile.id)
+    const [item] = await repository.listTrash()
+    await writeFile(join(repository.vaultPath, 'recycle-bin', 'profiles', item.trashId, 'deleted-profile.json'), JSON.stringify({
+      schemaVersion: 1,
+      deletedAt: new Date().toISOString(),
+      profile: { id: '../outside' }
+    }))
+
+    await expect(repository.restore(item.trashId)).rejects.toThrow('元数据无效')
+    await expect(readFile(join(repository.vaultPath, 'recycle-bin', 'profiles', item.trashId, 'deleted-profile.json'), 'utf8'))
+      .resolves.toContain('../outside')
   })
 
   it('tracks pinned kernel references in active and recyclable profiles', async () => {

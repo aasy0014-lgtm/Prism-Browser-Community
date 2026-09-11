@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AppRecoveryStatus } from '../shared/types'
-import { writeAtomicJson } from './atomic-file'
+import { readStableText, writeAtomicJson } from './atomic-file'
 
 interface AppSessionMarker {
   schemaVersion: 1
@@ -68,7 +68,7 @@ export class AppSessionTracker {
     await mkdir(this.directory, { recursive: true })
     let previousRaw: string | undefined
     try {
-      previousRaw = await readFile(this.markerPath, 'utf8')
+      previousRaw = await readStableText(this.markerPath, 256 * 1024)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
@@ -136,7 +136,7 @@ export class AppSessionTracker {
     if (!this.snapshotValue) return
     let marker: unknown
     try {
-      marker = JSON.parse(await readFile(this.markerPath, 'utf8'))
+      marker = JSON.parse(await readStableText(this.markerPath, 256 * 1024))
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
       throw new Error('应用会话标记损坏，已保留供下次启动诊断')
@@ -149,7 +149,7 @@ export class AppSessionTracker {
 
   private async readHistory(): Promise<UncleanAppSession[]> {
     try {
-      return validHistory(JSON.parse(await readFile(this.historyPath, 'utf8')))
+      return validHistory(JSON.parse(await readStableText(this.historyPath, 4 * 1024 * 1024)))
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT' || error instanceof SyntaxError) return []
       throw error

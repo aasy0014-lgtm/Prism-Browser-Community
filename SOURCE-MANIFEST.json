@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-11T13:00:35.998Z",
+  "generatedAt": "2026-09-11T14:07:31.714Z",
   "edition": "community-source",
   "files": [
     {
@@ -135,13 +135,13 @@
     },
     {
       "path": "src/main/announcement-manager.ts",
-      "size": 7333,
-      "sha256": "2801664ede5cbb8420860364cf77cecab9ba5eac2a7c83df091303aebd96b3c2"
+      "size": 7347,
+      "sha256": "232bd5274de669fce2c0f5adab035387915baa2486b5fac21214f60fcd1bfbe0"
     },
     {
       "path": "src/main/app-logger.ts",
-      "size": 2036,
-      "sha256": "96a0afb28b0d0b5a9cd7bde552f05456dd459dbc43ab3acdd6beec185b90bc65"
+      "size": 2130,
+      "sha256": "140084cecb28d4adcf033ab6730af11b2add9f52a6aefdfcc4a07a4698471fb3"
     },
     {
       "path": "src/main/app-session.test.ts",
@@ -150,23 +150,23 @@
     },
     {
       "path": "src/main/app-session.ts",
-      "size": 4996,
-      "sha256": "0fc5746b97b9117af37118e462bf1318af3c05d4ef42348af7696dc6ff963223"
+      "size": 5037,
+      "sha256": "7a5e3821ffa8167f93654a3b46e497ac239051c60f912d2999a9b1ad6fb23562"
     },
     {
       "path": "src/main/atomic-file.test.ts",
-      "size": 2315,
-      "sha256": "8cf1e83487cbcdded6a87c6bc86c73aac3a620c40f5f2eef64704bfe993377a5"
+      "size": 3223,
+      "sha256": "998d6bc4983e6afe7ba2218d84a70ce9e823dd491cbaa09b21c52da1ff9cb673"
     },
     {
       "path": "src/main/atomic-file.ts",
-      "size": 2758,
-      "sha256": "3fcc7a57d7862b84a766a887134372b80ee07fd3aaf9b73da2d1c3a56085b27d"
+      "size": 5386,
+      "sha256": "901f96bb19a5b3aa9800d806521b018d3a793811fd85f2b8f317a94dc49f4fd4"
     },
     {
       "path": "src/main/automation-audit.ts",
-      "size": 1526,
-      "sha256": "d015dc2e7d62ed305778d262788c572c1a126ebca74a8000681058aa285b0c4e"
+      "size": 1629,
+      "sha256": "b2cd7ab376e75206a82f193f9c939657abb496ff11ae6b6f930edd7bec991e69"
     },
     {
       "path": "src/main/browser-control-session.test.ts",
@@ -185,8 +185,8 @@
     },
     {
       "path": "src/main/browser-launcher.ts",
-      "size": 42805,
-      "sha256": "e811cc0d197c6006a96228110af7199302a429ef7f0250794a5dbc4057c7d187"
+      "size": 42826,
+      "sha256": "92275b52f3f2e4860692c9b145c1cde3c27a4b4ddcf43ad15d4a32d029c6a566"
     },
     {
       "path": "src/main/browser-locator.ts",
@@ -220,8 +220,8 @@
     },
     {
       "path": "src/main/device-identity.ts",
-      "size": 3200,
-      "sha256": "e42a3e6fc20e4a510df80a298488d2b349056574b2436dc6dc798c69ddb833f7"
+      "size": 3217,
+      "sha256": "eb6520799c38afcab9eadc03c1968c1ed4f304f6e519ecf9ec9281ff8b3d8e66"
     },
     {
       "path": "src/main/electron-device-key-protector.ts",
@@ -235,8 +235,8 @@
     },
     {
       "path": "src/main/extension-store.ts",
-      "size": 7884,
-      "sha256": "e5940d0b1b431fe8808b71e20c287f57fb570898ebe529748348bb15b4e6b378"
+      "size": 7847,
+      "sha256": "04a55581c1c9650280b0c7d12f3a77ba8e439801d96d7c3e7693293ff23cb1b4"
     },
     {
       "path": "src/main/host-hardware.ts",
@@ -250,8 +250,8 @@
     },
     {
       "path": "src/main/ipc.ts",
-      "size": 24863,
-      "sha256": "2338c3cde0f0ee11d2ec42a907cede6604f9401117edb4829ef424c061d0fb3a"
+      "size": 24545,
+      "sha256": "5e4795cca6f3f46c03d8f967d0647f4b680b5999ced383b43a94e98f0d4b84bd"
     },
     {
       "path": "src/main/kernel-catalog.ts",
@@ -265,18 +265,18 @@
     },
     {
       "path": "src/main/kernel-integrity.ts",
-      "size": 11210,
-      "sha256": "ed5c9243860159555950a7853deabd5c8b301e973e463c59dfbd1ee316b44f46"
+      "size": 10251,
+      "sha256": "73b0d867cc7207dd0ca9855f13ebeea466e32339db417ae2e21f77513a6d27ee"
     },
     {
       "path": "src/main/kernel-manager.test.ts",
-      "size": 2933,
-      "sha256": "546b7640b01035998e2ed6a1c5730914be22184a28b33dd58ea1829b0935f5fe"
+      "size": 3951,
+      "sha256": "5ad45a40a9aee1a4dd4656ca2c2cdcba074d990ea51c3336eba6da834aadf51a"
     },
     {
       "path": "src/main/kernel-manager.ts",
-      "size": 40334,
-      "sha256": "db68ca96519029cad6aab98af38f322e9e5612532005507c8ee882008d73dfe0"
+      "size": 40423,
+      "sha256": "495404a1a8e4595ea0674d19c8ee6880f17a64daa9ab9f1fc6bd2acf99f0f6a2"
     },
     {
       "path": "src/main/launch-args.ts",
@@ -290,13 +290,13 @@
     },
     {
       "path": "src/main/license-manager.ts",
-      "size": 22895,
-      "sha256": "009a9c27d74ccf00e89bdf805bea6e5b78a5da6270a053140eba84c3482d64bb"
+      "size": 22967,
+      "sha256": "b7807f37f396a0b7e4c686d475baf4556f666da18d5ebb062c81e2df544ed177"
     },
     {
       "path": "src/main/mcp-audit.ts",
-      "size": 1646,
-      "sha256": "38d3b1d8d23ef89b7c230ad32d67572e7229c998cbf78b57ab012e3dc8e38017"
+      "size": 1754,
+      "sha256": "18a6e00b8d14fad947f8dc765b136042d714ad9ed1d3aa67f99e2df8135e0af4"
     },
     {
       "path": "src/main/mcp-control-manager.test.ts",
@@ -310,8 +310,8 @@
     },
     {
       "path": "src/main/mcp-permission-store.ts",
-      "size": 3887,
-      "sha256": "2ebb647195c01846e364e7108e3a9879c03983889cee29a844685bd2b320e3fe"
+      "size": 3908,
+      "sha256": "21d04041c455fd34cb163cc0334fe01198f6ff0bf9e782d8732b55f5353c4326"
     },
     {
       "path": "src/main/pro-agent-integrity.ts",
@@ -350,8 +350,8 @@
     },
     {
       "path": "src/main/profile-backup.ts",
-      "size": 21813,
-      "sha256": "2f69b6330af9ed7ec58c6bed4746065c181d2e52c2c312d1f7199b7d98c9c8eb"
+      "size": 21951,
+      "sha256": "e3173d75312dd9f2dd07f1bc7cf6a2b7e9b932d1651a89d8a8fe857996be9541"
     },
     {
       "path": "src/main/profile-batch-csv.ts",
@@ -380,13 +380,13 @@
     },
     {
       "path": "src/main/profile-store.test.ts",
-      "size": 17054,
-      "sha256": "46e5ce2537ea3fd7ccc1766fb91d8e9ace41830be35c6c3cb0bc56d8915faa7b"
+      "size": 18518,
+      "sha256": "cc7b5d9a1870eaa15a7c638bf119e8b9b78196a14ca9d0a859b5ca3483531aaf"
     },
     {
       "path": "src/main/profile-store.ts",
-      "size": 31196,
-      "sha256": "1598208fe45045e85e469840633d9b29bc9e2348849da3c20d813cf712488392"
+      "size": 32979,
+      "sha256": "1d5bc7efa9601a1fedde249291a6eaf9112b0796157a84166121ef83cc657fde"
     },
     {
       "path": "src/main/profile-transfer.test.ts",
@@ -435,8 +435,8 @@
     },
     {
       "path": "src/main/scheduler-audit.ts",
-      "size": 1494,
-      "sha256": "9ea8b96d1abf825e910efa5530eb6b3f31282e63ade3ab1619c47ed80103aabb"
+      "size": 1594,
+      "sha256": "cad6092e246919f818f3a0541aafe59ed1636c561cbed0d90236bb138ae7596f"
     },
     {
       "path": "src/main/scheduler-manager.test.ts",
@@ -450,8 +450,8 @@
     },
     {
       "path": "src/main/scheduler-store.ts",
-      "size": 10096,
-      "sha256": "f83a70ca8810fc4538f84ac4dc3ec85a382c6b3150de732ac09c265f859bcec8"
+      "size": 10117,
+      "sha256": "1d773cef2f394498a4c1333d3dff1937f7b16ac0978d884faeaedbeaf08072fe"
     },
     {
       "path": "src/main/secret-codec.ts",
@@ -465,8 +465,8 @@
     },
     {
       "path": "src/main/settings-store.ts",
-      "size": 1869,
-      "sha256": "eca129a1f9fcc1d58c9514f8237e8c25d047897dc363956a22d90d648f0d1303"
+      "size": 1886,
+      "sha256": "cf96c081410b56f63c07968ee6883b752ef0eba2aa0bbd68482edf1180981fea"
     },
     {
       "path": "src/main/update-manager.test.ts",
@@ -475,8 +475,8 @@
     },
     {
       "path": "src/main/update-manager.ts",
-      "size": 15200,
-      "sha256": "a96bf7c1d3193fbe2cc10e195ae23498721651bcfcab6080a8578f784e8ca9cc"
+      "size": 15255,
+      "sha256": "bd6f8901433f07eda0c26ee8db2f72e76e2ea6b55305ba1486c5f7c917ccd021"
     },
     {
       "path": "src/main/workspace-migration.test.ts",
@@ -485,8 +485,8 @@
     },
     {
       "path": "src/main/workspace-migration.ts",
-      "size": 26538,
-      "sha256": "d8a6cd8d3d6209a6847c30e8b5857fd0ac7565acc4f6cfe77677c6dfa6f0c6e7"
+      "size": 26676,
+      "sha256": "21ad88a58149b32490820b28f6bf4d6f082ff3629c0604fc5291930ec438c307"
     },
     {
       "path": "src/preload/index.ts",

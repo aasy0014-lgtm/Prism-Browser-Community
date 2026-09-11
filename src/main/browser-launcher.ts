@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { access, mkdir, readFile, rm, statfs } from 'node:fs/promises'
+import { access, mkdir, rm, statfs } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { join } from 'node:path'
 import type { BrowserCrashRecord, BrowserProfile, LaunchDiagnosticCheck, LaunchDiagnosticReport, ProfileLaunchOptions, ProxyConfig, ProxyTestResult } from '../shared/types'
@@ -21,7 +21,7 @@ import { sameProxyIdentity } from './profile-secrets'
 import { BrowserControlSession, PipeCdpTransport } from './browser-control-session'
 import type { Readable, Writable } from 'node:stream'
 import { kernelRequiresPro } from '../shared/kernel-policy'
-import { writeAtomicJson } from './atomic-file'
+import { readStableText, writeAtomicJson } from './atomic-file'
 
 type ProxyTester = (config: ProxyConfig) => Promise<ProxyTestResult>
 
@@ -564,9 +564,9 @@ export class BrowserLauncher {
   async crashHistory(id: string): Promise<BrowserCrashRecord[]> {
     this.profiles.get(id)
     try {
-      return validCrashHistory(JSON.parse(await readFile(
+      return validCrashHistory(JSON.parse(await readStableText(
         join(this.profiles.profileRuntimePath(id), 'crash-history.json'),
-        'utf8'
+        4 * 1024 * 1024
       )))
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT' || error instanceof SyntaxError) return []

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { BrowserProfile, DeletedProfileSummary, ProfileBatchClassification, ProfileDraft, ProfileStoreHealth, ProxyCheckSummary, WebRtcPolicy } from '../shared/types'
 import { defaultProfileWindow, seedFromId } from '../shared/defaults'
@@ -8,7 +8,7 @@ import { validateProfileDraft } from '../shared/validation'
 import { identitySecretCodec, type SecretCodec } from './secret-codec'
 import { privateProxyConfig, sameProxyIdentity } from './profile-secrets'
 import { safePathSize } from './profile-data'
-import { copyTextAtomic, writeAtomicJson } from './atomic-file'
+import { copyTextAtomic, readStableText, writeAtomicJson } from './atomic-file'
 
 interface StoreFile {
   schemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11
@@ -162,7 +162,7 @@ export class ProfileStore {
   }
 
   private async readStore(path: string): Promise<LoadedStore> {
-    const raw = await readFile(path, 'utf8')
+    const raw = await readStableText(path)
     let value: unknown
     try {
       value = JSON.parse(raw)
@@ -413,7 +413,7 @@ export class ProfileStore {
       }
     }
     const marker = join(source, 'deleted-profile.json')
-    await writeFile(marker, JSON.stringify(record, null, 2), { encoding: 'utf8', mode: 0o600 })
+    await writeAtomicJson(marker, record)
     const trashId = `${id}-${Date.now()}`
     try {
       await rename(source, join(recycle, trashId))
@@ -432,8 +432,11 @@ export class ProfileStore {
     for (const entry of await readdir(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
       try {
-        const record = JSON.parse(await readFile(join(root, entry.name, 'deleted-profile.json'), 'utf8')) as DeletedProfileRecord
-        if (record.schemaVersion !== 1 || !record.profile?.id || !record.profile.name) continue
+        const record = JSON.parse(await readStableText(join(root, entry.name, 'deleted-profile.json'), 1024 * 1024)) as DeletedProfileRecord
+        if (record.schemaVersion !== 1 || !record.profile
+          || typeof record.profile.id !== 'string' || !/^[a-zA-Z0-9-]{1,100}$/.test(record.profile.id)
+          || typeof record.profile.name !== 'string' || !record.profile.name.trim() || record.profile.name.length > 60
+          || typeof record.deletedAt !== 'string' || !Number.isFinite(Date.parse(record.deletedAt))) continue
         result.push({
           trashId: entry.name,
           profileId: record.profile.id,
@@ -456,7 +459,7 @@ export class ProfileStore {
     for (const entry of await readdir(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
       try {
-        const record = JSON.parse(await readFile(join(root, entry.name, 'deleted-profile.json'), 'utf8')) as DeletedProfileRecord
+        const record = JSON.parse(await readStableText(join(root, entry.name, 'deleted-profile.json'), 1024 * 1024)) as DeletedProfileRecord
         if (record.profile?.extensionIds?.includes(id)) return true
       } catch {
         // Ignore legacy recycle entries without restorable metadata.
@@ -472,7 +475,7 @@ export class ProfileStore {
     for (const entry of await readdir(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
       try {
-        const record = JSON.parse(await readFile(join(root, entry.name, 'deleted-profile.json'), 'utf8')) as DeletedProfileRecord
+        const record = JSON.parse(await readStableText(join(root, entry.name, 'deleted-profile.json'), 1024 * 1024)) as DeletedProfileRecord
         if (record.profile?.kernelVersion === version && typeof record.profile.name === 'string') names.push(record.profile.name)
       } catch {
         // Ignore legacy recycle entries without restorable metadata.
@@ -486,7 +489,7 @@ export class ProfileStore {
     const target = join(this.vaultPath, 'recycle-bin', 'profiles', trashId)
     let record: DeletedProfileRecord
     try {
-      record = JSON.parse(await readFile(join(target, 'deleted-profile.json'), 'utf8')) as DeletedProfileRecord
+      record = JSON.parse(await readStableText(join(target, 'deleted-profile.json'), 1024 * 1024)) as DeletedProfileRecord
     } catch {
       throw new Error('回收站条目不完整，已取消永久删除')
     }
@@ -510,7 +513,7 @@ export class ProfileStore {
     for (const entry of await readdir(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
       try {
-        const record = JSON.parse(await readFile(join(root, entry.name, 'deleted-profile.json'), 'utf8')) as DeletedProfileRecord
+        const record = JSON.parse(await readStableText(join(root, entry.name, 'deleted-profile.json'), 1024 * 1024)) as DeletedProfileRecord
         if (record.schemaVersion === 1 && record.profile?.id && Date.parse(record.deletedAt) < cutoff) expired.push(entry.name)
       } catch {
         // Incomplete entries are deliberately preserved for manual inspection.
@@ -525,29 +528,60 @@ export class ProfileStore {
     const source = join(this.vaultPath, 'recycle-bin', 'profiles', trashId)
     let record: DeletedProfileRecord
     try {
-      record = JSON.parse(await readFile(join(source, 'deleted-profile.json'), 'utf8')) as DeletedProfileRecord
+      record = JSON.parse(await readStableText(join(source, 'deleted-profile.json'), 1024 * 1024)) as DeletedProfileRecord
     } catch {
       throw new Error('回收站中的环境数据不完整')
     }
-    if (record.schemaVersion !== 1 || !record.profile?.id) throw new Error('回收站中的环境元数据无效')
-    if (this.profiles.has(record.profile.id)) throw new Error('相同 ID 的环境已经存在，无法恢复')
+    const stored = record.profile as Partial<BrowserProfile> | undefined
+    const storedFingerprint = stored?.fingerprint as Partial<BrowserProfile['fingerprint']> | undefined
+    if (record.schemaVersion !== 1 || !stored || typeof stored.id !== 'string'
+      || !/^[a-zA-Z0-9-]{1,100}$/.test(stored.id)
+      || !trashId.startsWith(`${stored.id}-`)
+      || !/^\d+$/.test(trashId.slice(stored.id.length + 1))
+      || typeof record.deletedAt !== 'string' || !Number.isFinite(Date.parse(record.deletedAt))
+      || typeof stored.createdAt !== 'string' || !Number.isFinite(Date.parse(stored.createdAt))
+      || stored.lastOpenedAt !== undefined
+        && (typeof stored.lastOpenedAt !== 'string' || !Number.isFinite(Date.parse(stored.lastOpenedAt)))
+      || !stored.proxy || typeof stored.proxy.password !== 'string') {
+      throw new Error('回收站中的环境元数据无效')
+    }
+    if (this.profiles.has(stored.id)) throw new Error('相同 ID 的环境已经存在，无法恢复')
+    let draft: ProfileDraft
+    try {
+      draft = validateProfileDraft({
+        name: stored.name as string,
+        note: stored.note as string,
+        group: typeof stored.group === 'string' ? stored.group : '',
+        tags: Array.isArray(stored.tags) ? stored.tags : [],
+        extensionIds: Array.isArray(stored.extensionIds) ? stored.extensionIds : [],
+        color: stored.color as string,
+        startUrls: stored.startUrls as string[],
+        kernelVersion: typeof stored.kernelVersion === 'string' ? stored.kernelVersion : '',
+        window: stored.window ?? defaultProfileWindow(),
+        proxy: { ...stored.proxy, password: this.secrets.decode(stored.proxy.password) },
+        fingerprint: {
+          ...storedFingerprint,
+          hardwareProfileId: storedFingerprint?.hardwareProfileId ?? 'legacy-custom',
+          webrtcPolicy: safeWebRtcPolicy(storedFingerprint?.webrtcPolicy),
+          networkIdentityMode: storedFingerprint?.networkIdentityMode ?? 'manual',
+          proxyExitPolicy: storedFingerprint?.proxyExitPolicy ?? 'warn',
+          disabledSpoofing: Array.isArray(storedFingerprint?.disabledSpoofing) ? storedFingerprint.disabledSpoofing : []
+        } as ProfileDraft['fingerprint']
+      })
+    } catch {
+      throw new Error('回收站中的环境元数据无效')
+    }
     const profile: BrowserProfile = {
-      ...record.profile,
-      serialNumber: validProfileSerial(record.profile.serialNumber)
-        && !this.list().some((item) => item.serialNumber === record.profile.serialNumber)
-        ? record.profile.serialNumber
+      ...stored,
+      ...draft,
+      id: stored.id,
+      serialNumber: validProfileSerial(stored.serialNumber)
+        && !this.list().some((item) => item.serialNumber === stored.serialNumber)
+        ? stored.serialNumber
         : this.nextSerialNumber++,
-      kernelVersion: typeof record.profile.kernelVersion === 'string' ? record.profile.kernelVersion : '',
-      group: typeof record.profile.group === 'string' ? record.profile.group : '',
-      tags: Array.isArray(record.profile.tags) ? record.profile.tags : [],
-      extensionIds: Array.isArray(record.profile.extensionIds) ? record.profile.extensionIds : [],
-      fingerprint: {
-        ...record.profile.fingerprint,
-        webrtcPolicy: safeWebRtcPolicy(record.profile.fingerprint?.webrtcPolicy)
-      },
-      window: record.profile.window ?? defaultProfileWindow(),
-      favorite: record.profile.favorite === true,
-      proxy: privateProxyConfig({ ...record.profile.proxy, password: this.secrets.decode(record.profile.proxy.password) }),
+      createdAt: stored.createdAt,
+      favorite: stored.favorite === true,
+      proxy: privateProxyConfig(draft.proxy),
       status: 'closed',
       lastError: undefined,
       updatedAt: new Date().toISOString()
@@ -650,7 +684,7 @@ export class ProfileStore {
     }
     let marker: ProfileOwnerMarker
     try {
-      marker = JSON.parse(await readFile(this.profileOwnerPath(id), 'utf8')) as ProfileOwnerMarker
+      marker = JSON.parse(await readStableText(this.profileOwnerPath(id), 256 * 1024)) as ProfileOwnerMarker
     } catch {
       throw new Error('环境数据身份标记损坏，为保护数据已取消操作')
     }

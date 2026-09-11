@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { constants } from 'node:fs'
-import { access, cp, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, statfs, writeFile } from 'node:fs/promises'
+import { access, cp, lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm, stat, statfs } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Readable, Transform } from 'node:stream'
@@ -22,7 +22,7 @@ import type { SettingsStore } from './settings-store'
 import type { Logger } from './app-logger'
 import type { AppSettings } from '../shared/types'
 import { kernelRequiresPro } from '../shared/kernel-policy'
-import { writeAtomicJson } from './atomic-file'
+import { readStableText, writeAtomicJson } from './atomic-file'
 
 const execFileAsync = promisify(execFile)
 const RELEASES_URL = 'https://api.github.com/repos/adryfish/fingerprint-chromium/releases?per_page=10'
@@ -351,7 +351,7 @@ export class KernelManager {
         source: 'local-build',
         target: `${process.platform}-${process.arch}`
       }
-      await writeFile(join(stagingPath, 'manifest.json'), JSON.stringify(manifest, null, 2), { mode: 0o600 })
+      await writeAtomicJson(join(stagingPath, 'manifest.json'), manifest)
       await rename(stagingPath, destination)
       await this.rememberPreviousKernel(join(destination, executableRelative))
       await this.settings.update({ browserExecutable: join(destination, executableRelative), fingerprintKernel: true, enginePreference: 'auto' })
@@ -374,7 +374,10 @@ export class KernelManager {
     const manifest = await this.readManifest(version)
     if (!manifest) throw new Error('该内核尚未安装')
     const executable = join(this.kernelPath(version), manifest.executableRelative)
-    if (!await pathExists(executable)) throw new Error('内核文件不完整，请重新安装')
+    const executableInfo = await lstat(executable).catch(() => undefined)
+    if (!executableInfo?.isFile() || executableInfo.isSymbolicLink() || executableInfo.size <= 0) {
+      throw new Error('内核文件不完整，请重新安装')
+    }
     const integrity = await verifyKernelIntegrity(this.kernelPath(version), manifest.executableRelative, manifest)
     if (integrity.status === 'corrupt') throw new Error(`内核完整性校验失败：${integrity.reason}`)
     await this.rememberPreviousKernel(executable)
@@ -430,8 +433,10 @@ export class KernelManager {
       const manifest = await this.readManifest(version)
       if (!manifest) return { version, status: 'corrupt', message: '内核文件不完整，请重新导入或安装新版 Prism Browser', checkedAt }
       const executable = join(this.kernelPath(version), manifest.executableRelative)
-      const info = await stat(executable)
-      if (!info.isFile() || info.size <= 0) return { version, status: 'corrupt', message: '内核文件已损坏，请重新导入或安装新版 Prism Browser', checkedAt }
+      const info = await lstat(executable)
+      if (!info.isFile() || info.isSymbolicLink() || info.size <= 0) {
+        return { version, status: 'corrupt', message: '内核文件已损坏，请重新导入或安装新版 Prism Browser', checkedAt }
+      }
       const integrity = await verifyKernelIntegrity(this.kernelPath(version), manifest.executableRelative, manifest)
       if (integrity.status === 'corrupt') {
         this.logger?.error('浏览器内核完整性检查失败', { version, reason: integrity.reason })
@@ -638,7 +643,7 @@ export class KernelManager {
       const executable = join(targetApp, 'Contents', 'MacOS', 'Chromium')
       if (!await pathExists(executable)) throw new Error('Chromium.app 内缺少可执行文件')
       const manifest = await this.createManifest(release, stagingPath, relative(stagingPath, executable))
-      await writeFile(join(stagingPath, 'manifest.json'), JSON.stringify(manifest, null, 2), { mode: 0o600 })
+      await writeAtomicJson(join(stagingPath, 'manifest.json'), manifest)
       await rename(stagingPath, this.kernelPath(release.version))
       return manifest
     } finally {
@@ -662,7 +667,7 @@ export class KernelManager {
       await cp(dirname(chrome), browserPath, { recursive: true })
       const executable = join(browserPath, 'chrome.exe')
       const manifest = await this.createManifest(release, stagingPath, relative(stagingPath, executable))
-      await writeFile(join(stagingPath, 'manifest.json'), JSON.stringify(manifest, null, 2), { mode: 0o600 })
+      await writeAtomicJson(join(stagingPath, 'manifest.json'), manifest)
       await rename(stagingPath, this.kernelPath(release.version))
       return manifest
     } finally {
@@ -733,7 +738,7 @@ export class KernelManager {
 
   private async readActivationBackup(): Promise<KernelActivationBackup | undefined> {
     try {
-      const value = JSON.parse(await readFile(this.activationBackupPath(), 'utf8')) as Partial<KernelActivationBackup>
+      const value = JSON.parse(await readStableText(this.activationBackupPath(), 1024 * 1024)) as Partial<KernelActivationBackup>
       if (value.schemaVersion !== 1 || typeof value.recordedAt !== 'string' || !value.settings
         || typeof value.settings.browserExecutable !== 'string'
         || typeof value.settings.fingerprintKernel !== 'boolean'

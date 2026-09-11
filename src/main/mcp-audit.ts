@@ -1,5 +1,6 @@
-import { mkdir, rename, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, rename } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { appendPrivateText } from './atomic-file'
 import { safeErrorText } from './redaction'
 
 export interface McpAuditEvent {
@@ -20,9 +21,13 @@ export class McpAuditLog {
 
   async initialize(): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true })
-    try { if ((await stat(this.path)).size >= 10 * 1024 * 1024) await rename(this.path, `${this.path}.previous`) }
+    try {
+      const info = await lstat(this.path)
+      if (info.isSymbolicLink() || !info.isFile()) throw new Error('MCP 审计日志无效')
+      if (info.size >= 10 * 1024 * 1024) await rename(this.path, `${this.path}.previous`)
+    }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-    await writeFile(this.path, '', { flag: 'a', mode: 0o600 })
+    await appendPrivateText(this.path, '')
   }
 
   record(event: McpAuditEvent): void {
@@ -34,7 +39,7 @@ export class McpAuditLog {
       requestId: event.requestId?.slice(0, 100),
       detail: event.detail ? safeErrorText(event.detail).slice(0, 300) : undefined
     }
-    this.queue = this.queue.then(() => writeFile(this.path, `${JSON.stringify(safe)}\n`, { flag: 'a', encoding: 'utf8', mode: 0o600 })).catch(() => undefined)
+    this.queue = this.queue.then(() => appendPrivateText(this.path, `${JSON.stringify(safe)}\n`)).catch(() => undefined)
   }
 
   flush(): Promise<void> { return this.queue }

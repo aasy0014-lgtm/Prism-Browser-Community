@@ -1,7 +1,7 @@
 import { createHash, createPublicKey, verify as verifySignature } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { constants } from 'node:fs'
-import { access, lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
+import { access, lstat, mkdir, open, rename, rm } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Readable, Transform } from 'node:stream'
@@ -13,6 +13,7 @@ import type {
   UpdateDistributionMode
 } from '../shared/types'
 import type { Logger } from './app-logger'
+import { readStableText } from './atomic-file'
 
 interface UpdateConfig {
   schemaVersion: 1
@@ -341,7 +342,7 @@ export class UpdateManager {
   private async readConfig(): Promise<UpdateConfig> {
     const path = this.configOverride ?? join(this.resourcesPath, 'update-config.json')
     await access(path)
-    const value = JSON.parse(await readFile(path, 'utf8')) as Partial<UpdateConfig>
+    const value = JSON.parse(await readStableText(path, MAX_MANIFEST_BYTES)) as Partial<UpdateConfig>
     if (value.schemaVersion !== 1 || !['stable', 'beta'].includes(value.channel ?? '')
       || !['signed', 'internal-unsigned'].includes(value.distributionMode ?? '')
       || value.distributionMode === 'internal-unsigned' && value.channel !== 'beta'

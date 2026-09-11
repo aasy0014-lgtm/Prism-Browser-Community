@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { Readable } from 'node:stream'
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -72,5 +72,27 @@ describe('KernelManager download hardening', () => {
     const manager = new KernelManager(root, {} as never, () => undefined)
 
     await expect(download(manager, release(expected), destination)).rejects.toThrow('超过发行包声明的大小')
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects a legacy kernel manifest whose executable is a symbolic link', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'prism-kernel-legacy-link-'))
+    roots.push(root)
+    const version = '144.0.7559.132'
+    const kernelRoot = join(root, 'kernels', version)
+    const external = join(root, 'external-browser')
+    await mkdir(kernelRoot, { recursive: true })
+    await writeFile(external, 'external-browser')
+    await symlink(external, join(kernelRoot, 'chrome'))
+    await writeFile(join(kernelRoot, 'manifest.json'), JSON.stringify({
+      version,
+      assetName: 'legacy-fixture',
+      sha256: 'a'.repeat(64),
+      installedAt: new Date().toISOString(),
+      executableRelative: 'chrome'
+    }))
+
+    const manager = new KernelManager(root, {} as never, () => undefined)
+    await expect(manager.activate(version)).rejects.toThrow('文件不完整')
+    await expect(manager.verify(version)).resolves.toMatchObject({ status: 'corrupt' })
   })
 })

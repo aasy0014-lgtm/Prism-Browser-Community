@@ -118,7 +118,9 @@ async function copyStableFile(
   const handle = await open(source, READ_ONLY_NOFOLLOW)
   try {
     const opened = await handle.stat()
-    if (!opened.isFile() || opened.size !== expectedSize) throw new Error(`迁移文件在读取期间发生变化：${archivePath}`)
+    if (!opened.isFile() || opened.size !== expectedSize || opened.dev !== initial.dev || opened.ino !== initial.ino) {
+      throw new Error(`迁移文件在读取期间发生变化：${archivePath}`)
+    }
     let actualSize = 0
     const stream = handle.createReadStream({ autoClose: false })
     for await (const chunk of stream) {
@@ -128,7 +130,8 @@ async function copyStableFile(
       await onChunk(data)
     }
     const final = await handle.stat()
-    if (actualSize !== expectedSize || !final.isFile() || final.size !== expectedSize) {
+    if (actualSize !== expectedSize || !final.isFile() || final.size !== expectedSize
+      || final.dev !== initial.dev || final.ino !== initial.ino) {
       throw new Error(`迁移文件在读取期间发生变化：${archivePath}`)
     }
   } finally {

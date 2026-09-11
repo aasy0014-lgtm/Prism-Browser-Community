@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile } from 'node:fs/promises'
+import { mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { ScheduledTask, ScheduledTaskDraft, ScheduledTaskSchedule } from '../shared/types'
-import { copyTextAtomic, writeAtomicJson } from './atomic-file'
+import { copyTextAtomic, readStableText, writeAtomicJson } from './atomic-file'
 
 interface StoredSchedulerData {
   schemaVersion: 1
@@ -215,7 +215,7 @@ export class SchedulerStore {
   }
 
   private async load(path: string): Promise<void> {
-    const value = JSON.parse(await readFile(path, 'utf8')) as Partial<StoredSchedulerData>
+    const value = JSON.parse(await readStableText(path, 4 * 1024 * 1024)) as Partial<StoredSchedulerData>
     if (value.schemaVersion !== 1 || !Array.isArray(value.tasks) || value.tasks.length > 500) throw new Error('计划任务文件格式无效')
     const tasks = value.tasks.map(validateStoredTask)
     if (new Set(tasks.map((task) => task.id)).size !== tasks.length) throw new Error('计划任务 ID 重复')

@@ -1,5 +1,6 @@
-import { mkdir, rename, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, rename } from 'node:fs/promises'
 import { join } from 'node:path'
+import { appendPrivateText } from './atomic-file'
 import { redactSensitiveText } from './redaction'
 
 export interface Logger {
@@ -32,13 +33,15 @@ export class AppLogger implements Logger {
   async initialize(): Promise<void> {
     await mkdir(this.directory, { recursive: true })
     try {
-      if ((await stat(this.path)).size >= 5 * 1024 * 1024) {
+      const info = await lstat(this.path)
+      if (info.isSymbolicLink() || !info.isFile()) throw new Error('日志文件无效')
+      if (info.size >= 5 * 1024 * 1024) {
         await rename(this.path, join(this.directory, 'prism.previous.log'))
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
-    await writeFile(this.path, '', { flag: 'a', mode: 0o600 })
+    await appendPrivateText(this.path, '')
   }
 
   info(message: string, details?: unknown): void {
@@ -55,7 +58,7 @@ export class AppLogger implements Logger {
 
   private append(level: 'INFO' | 'ERROR', message: string, details?: unknown): void {
     const line = `${new Date().toISOString()} [${level}] ${message}${detailsText(details)}\n`
-    this.queue = this.queue.then(() => writeFile(this.path, line, { flag: 'a', encoding: 'utf8', mode: 0o600 }))
+    this.queue = this.queue.then(() => appendPrivateText(this.path, line))
       .catch((error) => console.error('[logger] write failed', error))
   }
 }

@@ -1,8 +1,8 @@
-import { access, mkdir, readFile } from 'node:fs/promises'
+import { access, mkdir } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { AppSettings } from '../shared/types'
-import { writeAtomicJson } from './atomic-file'
+import { readStableText, writeAtomicJson } from './atomic-file'
 
 export class SettingsStore {
   private settings: AppSettings = { browserExecutable: '', fingerprintKernel: false, enginePreference: 'auto', recycleRetentionDays: 0 }
@@ -14,7 +14,7 @@ export class SettingsStore {
 
   async initialize(): Promise<void> {
     try {
-      const stored = JSON.parse(await readFile(this.path, 'utf8')) as Partial<AppSettings>
+      const stored = JSON.parse(await readStableText(this.path, 1024 * 1024)) as Partial<AppSettings>
       this.settings = {
         browserExecutable: typeof stored.browserExecutable === 'string' ? stored.browserExecutable : '',
         fingerprintKernel: stored.fingerprintKernel === true,

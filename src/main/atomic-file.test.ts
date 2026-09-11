@@ -2,7 +2,7 @@ import { lstat, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { copyTextAtomic, writeAtomicJson } from './atomic-file'
+import { appendPrivateText, copyTextAtomic, readStableText, writeAtomicJson } from './atomic-file'
 
 const roots: string[] = []
 
@@ -22,6 +22,17 @@ describe('atomic file writes', () => {
     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ version: 2, ready: true })
     if (process.platform !== 'win32') expect((await stat(path)).mode & 0o777).toBe(0o600)
     await expect(lstat(`${path}.tmp`)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('reads stable text and appends private log data', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'prism-atomic-log-'))
+    roots.push(root)
+    const path = join(root, 'audit.log')
+
+    await appendPrivateText(path, 'first\n')
+    await appendPrivateText(path, 'second\n')
+
+    await expect(readStableText(path)).resolves.toBe('first\nsecond\n')
   })
 
   it.skipIf(process.platform === 'win32')('does not follow a pre-existing temporary symlink', async () => {
@@ -52,5 +63,17 @@ describe('atomic file writes', () => {
 
     await expect(readFile(secret, 'utf8')).resolves.toBe('unchanged')
     await expect(readFile(destination, 'utf8')).resolves.toContain('"safe":true')
+  })
+
+  it.skipIf(process.platform === 'win32')('does not append through a log symlink', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'prism-atomic-log-link-'))
+    roots.push(root)
+    const path = join(root, 'audit.log')
+    const secret = join(root, 'secret.txt')
+    await writeFile(secret, 'unchanged')
+    await symlink(secret, path)
+
+    await expect(appendPrivateText(path, 'must not leak')).rejects.toThrow()
+    await expect(readFile(secret, 'utf8')).resolves.toBe('unchanged')
   })
 })

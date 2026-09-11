@@ -1,7 +1,7 @@
-import { mkdir, readFile } from 'node:fs/promises'
+import { mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { McpProfilePermission } from '../shared/types'
-import { copyTextAtomic, writeAtomicJson } from './atomic-file'
+import { copyTextAtomic, readStableText, writeAtomicJson } from './atomic-file'
 
 interface StoredPermissions {
   schemaVersion: 1
@@ -74,7 +74,7 @@ export class McpPermissionStore {
   }
 
   private async load(path: string): Promise<void> {
-    const value = JSON.parse(await readFile(path, 'utf8')) as Partial<StoredPermissions>
+    const value = JSON.parse(await readStableText(path, 4 * 1024 * 1024)) as Partial<StoredPermissions>
     if (value.schemaVersion !== 1 || !Array.isArray(value.permissions) || value.permissions.length > 1000) throw new Error('MCP 权限文件格式无效')
     const permissions = value.permissions.map(validatePermission)
     if (new Set(permissions.map((item) => item.profileId)).size !== permissions.length) throw new Error('MCP 权限文件包含重复环境')
