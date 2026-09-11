@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { constants } from 'node:fs'
-import { appendFile, lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -11,6 +11,7 @@ import { validateProfileDraft } from '../shared/validation'
 import type { Logger } from './app-logger'
 import type { ExtensionStore } from './extension-store'
 import type { ProfileStore } from './profile-store'
+import { appendPrivateBuffer, openPrivateAppendStream } from './atomic-file'
 
 const MAGIC = Buffer.concat([Buffer.from('PRISM-MIGRATION'), Buffer.from([1])])
 const AUTH_TAG_BYTES = 16
@@ -343,14 +344,20 @@ export class WorkspaceMigrationManager {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
     await writeFile(staging, Buffer.concat([MAGIC, headerLength, headerBytes]), { mode: 0o600, flag: 'wx' })
+    const stagingInfo = await lstat(staging)
+    if (!stagingInfo.isFile() || stagingInfo.isSymbolicLink()) throw new Error('迁移临时文件无效')
+    const stagingIdentity = { dev: stagingInfo.dev, ino: stagingInfo.ino }
     const cipher = createCipheriv('aes-256-gcm', key, nonce)
     cipher.setAAD(headerBytes)
     const input = new PassThrough()
-    const completion = pipeline(input, cipher, createWriteStream(staging, { flags: 'a', mode: 0o600 }))
+    let completion: Promise<void> | undefined
+    let writer: Awaited<ReturnType<typeof openPrivateAppendStream>> | undefined
     const digest = createHash('sha256')
     let fileCount = 0
     let totalBytes = 0
     try {
+      writer = await openPrivateAppendStream(staging, stagingIdentity)
+      completion = pipeline(input, cipher, writer.stream)
       await writeRecordHeader(input, { type: 'manifest', size: manifestBytes.length })
       await writeChunk(input, manifestBytes)
       for (const root of roots) for await (const file of safeFiles(root.root, root.prefix)) {
@@ -367,12 +374,13 @@ export class WorkspaceMigrationManager {
       await writeRecordHeader(input, { type: 'end', fileCount, totalBytes, contentSha256: digest.digest('hex') })
       input.end()
       await completion
-      await appendFile(staging, cipher.getAuthTag())
+      await writer.close()
+      await appendPrivateBuffer(staging, cipher.getAuthTag(), stagingIdentity)
       await rename(staging, destination)
       this.logger?.info('全部环境加密迁移包已导出', { profileCount: profiles.length, fileCount, totalBytes })
       return { path: destination, profileCount: profiles.length, importedCount: 0, skippedCount: 0, renamedCount: 0, extensionCount: referencedExtensionIds.length, totalBytes, fileCount }
     } catch (error) {
-      input.destroy(); await completion.catch(() => undefined); await rm(staging, { force: true }); throw error
+      input.destroy(); await completion?.catch(() => undefined); await writer?.close().catch(() => undefined); await rm(staging, { force: true }); throw error
     } finally { key.fill(0) }
   }
 

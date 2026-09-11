@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual, type Hash } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { constants } from 'node:fs'
-import { appendFile, lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -10,6 +10,7 @@ import type { BrowserProfile, ProfileBackupResult, ProfileDraft } from '../share
 import { validateProfileDraft } from '../shared/validation'
 import type { Logger } from './app-logger'
 import type { ProfileStore } from './profile-store'
+import { appendPrivateBuffer, openPrivateAppendStream } from './atomic-file'
 
 const MAGIC = Buffer.concat([Buffer.from('PRISM-PROFILE-BACKUP'), Buffer.from([1])])
 const AUTH_TAG_BYTES = 16
@@ -310,14 +311,20 @@ export class ProfileBackupManager {
     if (manifestBytes.length > MAX_MANIFEST_BYTES) throw new Error('备份清单过大')
 
     await writeFile(staging, Buffer.concat([MAGIC, headerLength, headerBytes]), { mode: 0o600, flag: 'wx' })
+    const stagingInfo = await lstat(staging)
+    if (!stagingInfo.isFile() || stagingInfo.isSymbolicLink()) throw new Error('备份临时文件无效')
+    const stagingIdentity = { dev: stagingInfo.dev, ino: stagingInfo.ino }
     const cipher = createCipheriv('aes-256-gcm', key, nonce)
     cipher.setAAD(headerBytes)
     const input = new PassThrough()
-    const completion = pipeline(input, cipher, createWriteStream(staging, { flags: 'a', mode: 0o600 }))
+    let completion: Promise<void> | undefined
+    let writer: Awaited<ReturnType<typeof openPrivateAppendStream>> | undefined
     const digest = createHash('sha256')
     let fileCount = 0
     let totalBytes = 0
     try {
+      writer = await openPrivateAppendStream(staging, stagingIdentity)
+      completion = pipeline(input, cipher, writer.stream)
       await writeRecordHeader(input, { type: 'manifest', size: manifestBytes.length })
       await writeChunk(input, manifestBytes)
       for await (const file of safeFiles(source)) {
@@ -335,13 +342,15 @@ export class ProfileBackupManager {
       await writeRecordHeader(input, { type: 'end', fileCount, totalBytes, contentSha256: digest.digest('hex') })
       input.end()
       await completion
-      await appendFile(staging, cipher.getAuthTag())
+      await writer.close()
+      await appendPrivateBuffer(staging, cipher.getAuthTag(), stagingIdentity)
       await rename(staging, destination)
       this.logger?.info('环境加密完整数据备份已导出', { profileId, bytes: totalBytes, files: fileCount })
       return { path: destination, totalBytes, fileCount }
     } catch (error) {
       input.destroy()
-      await completion.catch(() => undefined)
+      await completion?.catch(() => undefined)
+      await writer?.close().catch(() => undefined)
       await rm(staging, { force: true })
       throw error
     } finally {

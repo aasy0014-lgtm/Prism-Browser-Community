@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-11T14:07:31.714Z",
+  "generatedAt": "2026-09-11T14:27:24.989Z",
   "edition": "community-source",
   "files": [
     {
@@ -160,8 +160,8 @@
     },
     {
       "path": "src/main/atomic-file.ts",
-      "size": 5386,
-      "sha256": "901f96bb19a5b3aa9800d806521b018d3a793811fd85f2b8f317a94dc49f4fd4"
+      "size": 8614,
+      "sha256": "f771a8b4ace6dcace89cfd83bf308a8d9cb40a40c098db117529cbe9074f79ea"
     },
     {
       "path": "src/main/automation-audit.ts",
@@ -270,13 +270,13 @@
     },
     {
       "path": "src/main/kernel-manager.test.ts",
-      "size": 3951,
-      "sha256": "5ad45a40a9aee1a4dd4656ca2c2cdcba074d990ea51c3336eba6da834aadf51a"
+      "size": 4920,
+      "sha256": "8f61e808462d482e987dea3962e68a112bb4d34ca834cc245b568490fd8598ce"
     },
     {
       "path": "src/main/kernel-manager.ts",
-      "size": 40423,
-      "sha256": "495404a1a8e4595ea0674d19c8ee6880f17a64daa9ab9f1fc6bd2acf99f0f6a2"
+      "size": 40224,
+      "sha256": "2bad1e79f0dbf8e7c5e5d78d7b919c83e434957090ea3465f0d27ee59f4d6dd7"
     },
     {
       "path": "src/main/launch-args.ts",
@@ -350,8 +350,8 @@
     },
     {
       "path": "src/main/profile-backup.ts",
-      "size": 21951,
-      "sha256": "e3173d75312dd9f2dd07f1bc7cf6a2b7e9b932d1651a89d8a8fe857996be9541"
+      "size": 22499,
+      "sha256": "2be8d8d3806685dc7c8d667ff33cbb5ca58d2693202bfb73426779d3e95b5dc4"
     },
     {
       "path": "src/main/profile-batch-csv.ts",
@@ -485,8 +485,8 @@
     },
     {
       "path": "src/main/workspace-migration.ts",
-      "size": 26676,
-      "sha256": "21ad88a58149b32490820b28f6bf4d6f082ff3629c0604fc5291930ec438c307"
+      "size": 27219,
+      "sha256": "2864f865bc42717406ddf5d1808f1364b8a8eeafeecdfc7b9155dfc912d7937c"
     },
     {
       "path": "src/preload/index.ts",

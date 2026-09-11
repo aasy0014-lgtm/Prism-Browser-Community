@@ -1,8 +1,5 @@
 import { execFile } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { createReadStream, createWriteStream } from 'node:fs'
-import { constants } from 'node:fs'
-import { access, cp, lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm, stat, statfs } from 'node:fs/promises'
+import { access, cp, lstat, mkdir, mkdtemp, readdir, realpath, rename, rm, stat, statfs } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Readable, Transform } from 'node:stream'
@@ -22,11 +19,17 @@ import type { SettingsStore } from './settings-store'
 import type { Logger } from './app-logger'
 import type { AppSettings } from '../shared/types'
 import { kernelRequiresPro } from '../shared/kernel-policy'
-import { readStableText, writeAtomicJson } from './atomic-file'
+import {
+  openPrivateAppendStream,
+  openPrivateExclusiveStream,
+  readStableText,
+  writeAtomicJson,
+  type PrivateFileIdentity,
+  type PrivateWriteStream
+} from './atomic-file'
 
 const execFileAsync = promisify(execFile)
 const RELEASES_URL = 'https://api.github.com/repos/adryfish/fingerprint-chromium/releases?per_page=10'
-const READ_APPEND_NOFOLLOW = process.platform === 'win32' ? 'a' : constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW
 
 interface GithubAsset {
   name: string
@@ -62,21 +65,8 @@ interface KernelActivationBackup {
   settings: AppSettings
 }
 
-async function openDownloadWriter(path: string, append: boolean): Promise<{
-  stream: ReturnType<typeof createWriteStream>
-  close: () => Promise<void>
-}> {
-  if (!append) return { stream: createWriteStream(path, { flags: 'wx', mode: 0o600 }), close: async () => undefined }
-  const handle = await open(path, READ_APPEND_NOFOLLOW)
-  try {
-    return {
-      stream: createWriteStream(path, { fd: handle.fd, autoClose: false }),
-      close: async () => { await handle.close().catch(() => undefined) }
-    }
-  } catch (error) {
-    await handle.close().catch(() => undefined)
-    throw error
-  }
+function openDownloadWriter(path: string, append: boolean, expected?: PrivateFileIdentity): Promise<PrivateWriteStream> {
+  return append ? openPrivateAppendStream(path, expected) : openPrivateExclusiveStream(path)
 }
 
 function supportedAsset(assets: GithubAsset[]): GithubAsset | undefined {
@@ -522,6 +512,7 @@ export class KernelManager {
 
   private async download(release: KernelRelease, destination: string, allowRangeReset = true): Promise<void> {
     let existingBytes = 0
+    let existingIdentity: PrivateFileIdentity | undefined
     try {
       const info = await lstat(destination)
       if (info.isSymbolicLink()) {
@@ -530,6 +521,7 @@ export class KernelManager {
         throw new Error('内核下载目标不是普通文件')
       } else {
         existingBytes = info.size
+        existingIdentity = { dev: info.dev, ino: info.ino }
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
@@ -537,15 +529,15 @@ export class KernelManager {
     if (existingBytes > release.size) {
       await rm(destination, { force: true })
       existingBytes = 0
+      existingIdentity = undefined
     }
     if (existingBytes === 0) await rm(destination, { force: true })
     if (existingBytes === release.size) {
-      const existingHash = createHash('sha256')
-      for await (const chunk of createReadStream(destination)) existingHash.update(chunk as Buffer)
       this.emit(release, 'verifying', existingBytes, release.size, '正在校验已下载的内核文件…')
-      if (existingHash.digest('hex') === release.sha256.toLowerCase()) return
+      if (await hashStableFile(destination, release.size) === release.sha256.toLowerCase()) return
       await rm(destination, { force: true })
       existingBytes = 0
+      existingIdentity = undefined
     }
     const headers: Record<string, string> = {
       accept: 'application/octet-stream',
@@ -569,17 +561,20 @@ export class KernelManager {
     if (existingBytes > 0 && response.status === 206) {
       const range = response.headers.get('content-range')?.match(/^bytes (\d+)-(\d+)\/(\d+)$/)
       const rangeStart = Number(range?.[1]); const rangeEnd = Number(range?.[2]); const rangeTotal = Number(range?.[3])
-      if (!range || rangeStart !== existingBytes || rangeEnd < rangeStart || rangeTotal !== release.size) {
+      if (!range || rangeStart !== existingBytes || rangeEnd < rangeStart || rangeEnd >= rangeTotal || rangeTotal !== release.size
+        || !existingIdentity) {
         throw new Error('内核下载服务器返回了无效的断点范围')
       }
       resumedBytes = existingBytes
       append = true
+    } else if (existingBytes > 0) {
+      // A server may ignore the Range request and return the complete object.
+      // Remove the partial file before opening an exclusive writer for that body.
+      await rm(destination, { force: true })
+      existingBytes = 0
+      existingIdentity = undefined
     }
 
-    const hash = createHash('sha256')
-    if (resumedBytes) {
-      for await (const chunk of createReadStream(destination)) hash.update(chunk as Buffer)
-    }
     let received = resumedBytes
     let lastReport = 0
     const progress = new Transform({
@@ -589,7 +584,6 @@ export class KernelManager {
           callback(new Error('内核下载内容超过发行包声明的大小'))
           return
         }
-        hash.update(chunk)
         const now = Date.now()
         if (now - lastReport > 200) {
           lastReport = now
@@ -600,7 +594,7 @@ export class KernelManager {
     })
     const source = Readable.from(response.body as unknown as AsyncIterable<Uint8Array>)
     this.emit(release, 'downloading', received, release.size, resumedBytes ? '正在从断点继续下载…' : '正在下载浏览器内核…')
-    const writer = await openDownloadWriter(destination, append)
+    const writer = await openDownloadWriter(destination, append, existingIdentity)
     try {
       await pipeline(source, progress, writer.stream)
     } finally {
@@ -608,7 +602,7 @@ export class KernelManager {
     }
     if (received !== release.size) throw new Error(`内核下载不完整：期望 ${release.size} 字节，实际 ${received} 字节`)
     this.emit(release, 'verifying', received, release.size, '正在校验 SHA-256…')
-    const actual = hash.digest('hex')
+    const actual = await hashStableFile(destination, release.size)
     if (actual !== release.sha256.toLowerCase()) {
       await rm(destination, { force: true })
       throw new Error(`SHA-256 校验失败：期望 ${release.sha256.slice(0, 12)}…，实际 ${actual.slice(0, 12)}…`)
@@ -616,7 +610,9 @@ export class KernelManager {
   }
 
   private async assertDownloadSpace(downloadsPath: string, destination: string, totalBytes: number): Promise<void> {
-    const existingBytes = await stat(destination).then((info) => Math.min(info.size, totalBytes)).catch(() => 0)
+    const existingBytes = await lstat(destination)
+      .then((info) => info.isFile() && !info.isSymbolicLink() ? Math.min(info.size, totalBytes) : 0)
+      .catch(() => 0)
     const remainingBytes = Math.max(0, totalBytes - existingBytes)
     const fileSystem = await statfs(downloadsPath)
     const availableBytes = fileSystem.bavail * fileSystem.bsize

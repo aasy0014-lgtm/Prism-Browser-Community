@@ -57,6 +57,29 @@ describe('KernelManager download hardening', () => {
     await expect(readFile(external, 'utf8')).resolves.toBe('external-content')
   })
 
+  it('restarts a partial download when the server ignores the Range request', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'prism-kernel-download-range-reset-'))
+    roots.push(root)
+    const destination = join(root, 'kernel.download')
+    const payload = Buffer.from('verified-kernel-payload')
+    await writeFile(destination, payload.subarray(0, 8))
+
+    const fetchMock = vi.fn(async () => ({
+      status: 200,
+      ok: true,
+      body: Readable.from([payload]),
+      headers: new Headers({ 'content-length': String(payload.length) })
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const manager = new KernelManager(root, {} as never, () => undefined)
+    await download(manager, release(payload), destination)
+
+    expect(fetchMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      headers: expect.objectContaining({ range: 'bytes=8-' })
+    }))
+    await expect(readFile(destination)).resolves.toEqual(payload)
+  })
+
   it('rejects an HTTP body that exceeds the signed artifact size', async () => {
     const root = await mkdtemp(join(tmpdir(), 'prism-kernel-download-overflow-'))
     roots.push(root)
