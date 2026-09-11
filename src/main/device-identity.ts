@@ -6,8 +6,9 @@ import {
   sign,
   verify
 } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { writeAtomicJson } from './atomic-file'
 
 export interface DeviceKeyProtector {
   protect(value: string): string
@@ -83,9 +84,7 @@ export class DeviceIdentityStore {
       createdAt
     }
     await mkdir(dirname(this.path), { recursive: true })
-    const temporary = `${this.path}.tmp`
-    await writeFile(temporary, `${JSON.stringify(stored, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-    await rename(temporary, this.path)
+    await writeAtomicJson(this.path, stored)
     return { deviceId: deviceIdFor(publicPem), publicKey: publicPem, privateKey: privatePem, createdAt }
   }
 }

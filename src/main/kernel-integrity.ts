@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { createReadStream } from 'node:fs'
-import { lstat, readdir } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { lstat, open, readdir } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 export interface KernelCriticalFile {
@@ -28,6 +28,8 @@ const WINDOWS_CRITICAL_NAMES = [
   'v8_context_snapshot.bin',
   'snapshot_blob.bin'
 ]
+const READ_ONLY_NOFOLLOW = process.platform === 'win32' ? 'r' : constants.O_RDONLY | constants.O_NOFOLLOW
+const MAX_TEXT_FILE_BYTES = 1 * 1024 * 1024
 
 function portableRelative(path: string): string {
   return path.split(sep).join('/')
@@ -56,10 +58,59 @@ async function isNonEmptyFile(path: string): Promise<boolean> {
   }
 }
 
-async function hashFile(path: string): Promise<string> {
-  const hash = createHash('sha256')
-  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer)
-  return hash.digest('hex')
+/** Read small metadata through the opened handle, not through a replaceable path. */
+export async function readStableTextFile(path: string, maximum = MAX_TEXT_FILE_BYTES): Promise<string> {
+  if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > MAX_TEXT_FILE_BYTES) throw new Error('内核元数据大小限制无效')
+  const initial = await lstat(path)
+  if (!initial.isFile() || initial.isSymbolicLink() || initial.size < 1 || initial.size > maximum) {
+    throw new Error('内核元数据文件无效')
+  }
+  const handle = await open(path, READ_ONLY_NOFOLLOW)
+  try {
+    const opened = await handle.stat()
+    if (!opened.isFile() || opened.isSymbolicLink() || opened.size !== initial.size
+      || opened.dev !== initial.dev || opened.ino !== initial.ino) throw new Error('内核元数据在读取期间发生变化')
+    const buffer = Buffer.alloc(maximum + 1)
+    const { bytesRead } = await handle.read({ buffer, position: 0 })
+    if (bytesRead > maximum || bytesRead !== opened.size) throw new Error('内核元数据在读取期间发生变化')
+    const final = await handle.stat()
+    if (!final.isFile() || final.isSymbolicLink() || final.size !== opened.size) throw new Error('内核元数据在读取期间发生变化')
+    return buffer.subarray(0, bytesRead).toString('utf8')
+  } finally {
+    await handle.close().catch(() => undefined)
+  }
+}
+
+/** Hash the opened file handle so a path replacement cannot change the bytes mid-check. */
+export async function hashStableFile(path: string, expectedSize?: number): Promise<string> {
+  const initial = await lstat(path)
+  if (!initial.isFile() || initial.isSymbolicLink()
+    || expectedSize !== undefined && initial.size !== expectedSize) throw new Error('内核关键文件在校验期间发生变化')
+  const handle = await open(path, READ_ONLY_NOFOLLOW)
+  try {
+    const opened = await handle.stat()
+    if (!opened.isFile() || opened.isSymbolicLink() || opened.size !== initial.size
+      || expectedSize !== undefined && opened.size !== expectedSize
+      || opened.dev !== initial.dev || opened.ino !== initial.ino) {
+      throw new Error('内核关键文件在校验期间发生变化')
+    }
+    const hash = createHash('sha256')
+    let bytesRead = 0
+    const stream = handle.createReadStream({ autoClose: false })
+    for await (const chunk of stream) {
+      const data = chunk as Buffer
+      bytesRead += data.length
+      if (bytesRead > opened.size) throw new Error('内核关键文件在校验期间发生变化')
+      hash.update(data)
+    }
+    const final = await handle.stat()
+    if (!final.isFile() || final.isSymbolicLink() || final.size !== opened.size || bytesRead !== opened.size) {
+      throw new Error('内核关键文件在校验期间发生变化')
+    }
+    return hash.digest('hex')
+  } finally {
+    await handle.close().catch(() => undefined)
+  }
 }
 
 function aggregateCriticalFiles(files: KernelCriticalFile[]): string {
@@ -126,7 +177,7 @@ export async function collectKernelIntegrity(
     if (!absolute) throw new Error('内核关键文件路径越界')
     const info = await lstat(absolute)
     if (info.isSymbolicLink()) throw new Error('内核关键文件不能是符号链接')
-    criticalFiles.push({ path, size: info.size, sha256: await hashFile(absolute) })
+    criticalFiles.push({ path, size: info.size, sha256: await hashStableFile(absolute, info.size) })
   }
   return { criticalFiles, criticalFilesSha256: aggregateCriticalFiles(criticalFiles) }
 }
@@ -184,7 +235,7 @@ export async function verifyKernelIntegrity(
       if (!info.isFile() || info.isSymbolicLink() || info.size !== file.size) {
         return { status: 'corrupt', reason: `内核关键文件大小不一致：${file.path}` }
       }
-      if (await hashFile(absolute) !== file.sha256.toLowerCase()) {
+      if (await hashStableFile(absolute, file.size) !== file.sha256.toLowerCase()) {
         return { status: 'corrupt', reason: `内核关键文件 SHA-256 不一致：${file.path}` }
       }
     } catch {

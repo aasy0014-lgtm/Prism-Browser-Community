@@ -11,7 +11,9 @@ import type { EngineStatus, KernelHealth, KernelInstallProgress, KernelRelease }
 import { locateBrowser, locateBrowserSelection, normalizeBrowserSelection } from './browser-locator'
 import {
   collectKernelIntegrity,
+  hashStableFile,
   kernelPayloadIdentity,
+  readStableTextFile,
   validateKernelIntegrityFields,
   verifyKernelIntegrity,
   type KernelIntegrityFields
@@ -20,6 +22,7 @@ import type { SettingsStore } from './settings-store'
 import type { Logger } from './app-logger'
 import type { AppSettings } from '../shared/types'
 import { kernelRequiresPro } from '../shared/kernel-policy'
+import { writeAtomicJson } from './atomic-file'
 
 const execFileAsync = promisify(execFile)
 const RELEASES_URL = 'https://api.github.com/repos/adryfish/fingerprint-chromium/releases?per_page=10'
@@ -306,7 +309,7 @@ export class KernelManager {
           === kernelPayloadIdentity(sourceIntegrity, sourceExecutableRelative)) {
         if (!existing.criticalFiles || !existing.criticalFilesSha256) {
           const upgraded: InstalledKernelManifest = { ...existing, schemaVersion: 2, ...existingIntegrity }
-          await writeFile(join(destination, 'manifest.json'), JSON.stringify(upgraded, null, 2), { mode: 0o600 })
+          await writeAtomicJson(join(destination, 'manifest.json'), upgraded)
           this.logger?.info('本地内核完整性清单已升级', { version, files: existingIntegrity.criticalFiles.length })
         }
         return this.activate(version)
@@ -709,9 +712,7 @@ export class KernelManager {
   }
 
   private async hashFile(path: string): Promise<string> {
-    const hash = createHash('sha256')
-    for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer)
-    return hash.digest('hex')
+    return hashStableFile(path)
   }
 
   private activationBackupPath(): string {
@@ -727,7 +728,7 @@ export class KernelManager {
       recordedAt: new Date().toISOString(),
       settings: previous
     }
-    await writeFile(this.activationBackupPath(), JSON.stringify(backup, null, 2), { mode: 0o600 })
+    await writeAtomicJson(this.activationBackupPath(), backup)
   }
 
   private async readActivationBackup(): Promise<KernelActivationBackup | undefined> {
@@ -780,7 +781,7 @@ export class KernelManager {
     try {
       const root = this.kernelPath(version)
       if ((await lstat(root)).isSymbolicLink()) throw new Error('内核目录是符号链接')
-      const manifest = JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8')) as InstalledKernelManifest
+      const manifest = JSON.parse(await readStableTextFile(join(root, 'manifest.json'))) as InstalledKernelManifest
       if (manifest.version !== version || typeof manifest.assetName !== 'string' || !/^[a-f\d]{64}$/i.test(manifest.sha256)
         || typeof manifest.installedAt !== 'string' || typeof manifest.executableRelative !== 'string') {
         throw new Error('内核清单字段无效')

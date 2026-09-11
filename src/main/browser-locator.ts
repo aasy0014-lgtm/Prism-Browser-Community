@@ -1,11 +1,12 @@
 import { app } from 'electron'
-import { access, lstat, readFile, readdir, stat } from 'node:fs/promises'
+import { access, lstat, readdir, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { basename, isAbsolute, join, resolve, sep } from 'node:path'
 import type { AppSettings, EngineStatus } from '../shared/types'
 import type { SettingsStore } from './settings-store'
 import {
   validateKernelIntegrityFields,
+  readStableTextFile,
   verifyKernelIntegrity,
   type KernelCriticalFile
 } from './kernel-integrity'
@@ -34,6 +35,8 @@ const SYSTEM_CANDIDATES: Record<NodeJS.Platform, string[]> = {
 
 async function executableExists(path: string): Promise<boolean> {
   try {
+    const info = await lstat(path)
+    if (!info.isFile() || info.isSymbolicLink()) return false
     await access(path, constants.X_OK)
     return true
   } catch {
@@ -87,7 +90,7 @@ export async function locateBrowserForProfile(
   let managedResult: EngineStatus
   try {
     if ((await lstat(root)).isSymbolicLink()) throw new Error('内核目录是符号链接')
-    const manifest = JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8')) as Partial<ManagedKernelManifest>
+    const manifest = JSON.parse(await readStableTextFile(join(root, 'manifest.json'))) as Partial<ManagedKernelManifest>
     if (manifest.version !== version || typeof manifest.executableRelative !== 'string' || !manifest.executableRelative) {
       managedResult = missing('清单无效')
     } else {
@@ -168,7 +171,7 @@ export async function migrateMacLegacyKernelSelection(
   if (configured !== managedRoot && !configured.startsWith(`${managedRoot}${sep}`)) return { migrated: false }
 
   try {
-    const manifest = JSON.parse(await readFile(join(managedRoot, 'manifest.json'), 'utf8')) as Partial<ManagedKernelManifest>
+    const manifest = JSON.parse(await readStableTextFile(join(managedRoot, 'manifest.json'))) as Partial<ManagedKernelManifest>
     if (manifest.schemaVersion === 2 && manifest.criticalFiles && manifest.criticalFilesSha256) {
       return { migrated: false }
     }
@@ -210,7 +213,7 @@ export async function locateBundledBrowser(
     : [currentRoot]
   for (const root of roots) {
     try {
-      const manifest = JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8')) as Partial<ManagedKernelManifest>
+      const manifest = JSON.parse(await readStableTextFile(join(root, 'manifest.json'))) as Partial<ManagedKernelManifest>
       if ((manifest.schemaVersion !== 1 && manifest.schemaVersion !== 2) || !validKernelVersion(manifest.version ?? '')
         || typeof manifest.executableRelative !== 'string' || !manifest.executableRelative) continue
       if (requiredVersion && manifest.version !== requiredVersion) continue

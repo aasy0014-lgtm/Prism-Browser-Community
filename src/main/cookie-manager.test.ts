@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { defaultProfileDraft } from '../shared/defaults'
-import { CookieManager } from './cookie-manager'
+import { CookieManager, parseDevToolsPort, validateDevToolsWebSocket } from './cookie-manager'
 import type { ProcessInspector, SystemProcess } from './process-inspector'
 import { ProfileStore } from './profile-store'
 import { SettingsStore } from './settings-store'
@@ -15,6 +15,18 @@ afterEach(async () => {
 })
 
 describe('CookieManager process guard', () => {
+  it('accepts only a loopback CDP endpoint matching the rendezvous port', () => {
+    expect(parseDevToolsPort('9222\n/devtools/browser/test')).toBe(9222)
+    expect(validateDevToolsWebSocket('ws://127.0.0.1:9222/devtools/page/test', 9222))
+      .toBe('ws://127.0.0.1:9222/devtools/page/test')
+    expect(() => parseDevToolsPort('0')).toThrow()
+    expect(() => parseDevToolsPort('65536')).toThrow()
+    expect(() => validateDevToolsWebSocket('ws://127.0.0.1:9223/devtools/page/test', 9222)).toThrow()
+    expect(() => validateDevToolsWebSocket('ws://attacker.example/devtools/page/test', 9222)).toThrow()
+    expect(() => validateDevToolsWebSocket('wss://127.0.0.1:9222/devtools/page/test', 9222)).toThrow()
+    expect(() => validateDevToolsWebSocket('ws://127.0.0.1:9222/not-cdp', 9222)).toThrow()
+  })
+
   it('does not alter a profile while an external browser owns its data directory', async () => {
     const settingsRoot = await mkdtemp(join(tmpdir(), 'prism-cookie-settings-'))
     const vault = await mkdtemp(join(tmpdir(), 'prism-cookie-vault-'))

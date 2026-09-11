@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { access, copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { ScheduledTask, ScheduledTaskDraft, ScheduledTaskSchedule } from '../shared/types'
+import { copyTextAtomic, writeAtomicJson } from './atomic-file'
 
 interface StoredSchedulerData {
   schemaVersion: 1
@@ -224,13 +225,11 @@ export class SchedulerStore {
   private async persist(backupExisting = true): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true })
     if (backupExisting) {
-      try { await access(this.path); await copyFile(this.path, this.backupPath) } catch (error) {
+      try { await copyTextAtomic(this.path, this.backupPath) } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       }
     }
-    const temporary = `${this.path}.tmp`
     const data: StoredSchedulerData = { schemaVersion: 1, tasks: this.list() }
-    await writeFile(temporary, `${JSON.stringify(data, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-    await rename(temporary, this.path)
+    await writeAtomicJson(this.path, data)
   }
 }

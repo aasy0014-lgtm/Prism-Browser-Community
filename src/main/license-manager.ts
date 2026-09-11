@@ -1,8 +1,9 @@
 import { createHash, createPrivateKey, createPublicKey, randomBytes, sign } from 'node:crypto'
-import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { LicenseStatus, ProEntitlement } from '../shared/types'
 import type { Logger } from './app-logger'
+import { writeAtomicJson } from './atomic-file'
 import { DeviceIdentityStore, type DeviceKeyProtector } from './device-identity'
 import {
   canonicalJson,
@@ -548,9 +549,7 @@ export class LicenseManager {
 
   private async persistCertificate(certificate: SignedLicenseCertificate): Promise<void> {
     await mkdir(dirname(this.certificatePath), { recursive: true })
-    const temporary = `${this.certificatePath}.tmp`
-    await writeFile(temporary, `${JSON.stringify(certificate, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-    await rename(temporary, this.certificatePath)
+    await writeAtomicJson(this.certificatePath, certificate)
   }
 
   private setStatus(status: LicenseStatus): void {

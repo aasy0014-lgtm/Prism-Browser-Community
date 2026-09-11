@@ -1,6 +1,7 @@
-import { access, copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { McpProfilePermission } from '../shared/types'
+import { copyTextAtomic, writeAtomicJson } from './atomic-file'
 
 interface StoredPermissions {
   schemaVersion: 1
@@ -83,12 +84,10 @@ export class McpPermissionStore {
   private async persist(backupExisting = true): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true })
     if (backupExisting) {
-      try { await access(this.path); await copyFile(this.path, this.backupPath) }
+      try { await copyTextAtomic(this.path, this.backupPath) }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     }
-    const temporary = `${this.path}.tmp`
     const value: StoredPermissions = { schemaVersion: 1, permissions: this.list() }
-    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-    await rename(temporary, this.path)
+    await writeAtomicJson(this.path, value)
   }
 }

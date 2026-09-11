@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { access, mkdir, readFile, rename, rm, statfs, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, rm, statfs } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { join } from 'node:path'
 import type { BrowserCrashRecord, BrowserProfile, LaunchDiagnosticCheck, LaunchDiagnosticReport, ProfileLaunchOptions, ProxyConfig, ProxyTestResult } from '../shared/types'
@@ -21,6 +21,7 @@ import { sameProxyIdentity } from './profile-secrets'
 import { BrowserControlSession, PipeCdpTransport } from './browser-control-session'
 import type { Readable, Writable } from 'node:stream'
 import { kernelRequiresPro } from '../shared/kernel-policy'
+import { writeAtomicJson } from './atomic-file'
 
 type ProxyTester = (config: ProxyConfig) => Promise<ProxyTestResult>
 
@@ -224,11 +225,7 @@ export class BrowserLauncher {
       }
       const pipeControlEnabled = process.platform !== 'win32'
       if (pipeControlEnabled) args.push('--remote-debugging-pipe')
-      await writeFile(
-        join(runtimePath, 'last-launch.json'),
-        JSON.stringify({ executable: engine.executable, args, launchedAt: new Date().toISOString() }, null, 2),
-        { encoding: 'utf8', mode: 0o600 }
-      )
+      await writeAtomicJson(join(runtimePath, 'last-launch.json'), { executable: engine.executable, args, launchedAt: new Date().toISOString() })
 
       const child = this.browserSpawner(engine.executable, args, {
         stdio: pipeControlEnabled ? ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] : 'ignore',
@@ -313,12 +310,12 @@ export class BrowserLauncher {
         void (async () => {
           try {
             this.logger?.info('浏览器环境已启动', { profileId: id, pid: child.pid })
-            await writeFile(join(runtimePath, 'process.json'), JSON.stringify({
+            await writeAtomicJson(join(runtimePath, 'process.json'), {
               pid: child.pid,
               executable: engine.executable,
               userDataDir: this.profiles.profileDataPath(id),
               startedAt: new Date().toISOString()
-            }, null, 2), { mode: 0o600 })
+            })
             const next = await this.profiles.setRuntime(id, {
               status: 'running',
               lastOpenedAt: new Date().toISOString(),
@@ -731,11 +728,8 @@ export class BrowserLauncher {
 
   private async recordCrash(id: string, record: BrowserCrashRecord): Promise<void> {
     const path = join(this.profiles.profileRuntimePath(id), 'crash-history.json')
-    const temporary = `${path}.tmp`
     const history = [...await this.crashHistory(id), record].slice(-MAX_PROFILE_CRASH_RECORDS)
-    await writeFile(temporary, JSON.stringify(history, null, 2), { encoding: 'utf8', mode: 0o600 })
-    await rm(path, { force: true })
-    await rename(temporary, path)
+    await writeAtomicJson(path, history)
   }
 
   private async guardProfileAvailable(id: string): Promise<void> {

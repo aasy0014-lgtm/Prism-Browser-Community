@@ -1,7 +1,8 @@
-import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { AppSettings } from '../shared/types'
+import { writeAtomicJson } from './atomic-file'
 
 export class SettingsStore {
   private settings: AppSettings = { browserExecutable: '', fingerprintKernel: false, enginePreference: 'auto', recycleRetentionDays: 0 }
@@ -34,9 +35,7 @@ export class SettingsStore {
   async update(patch: Partial<AppSettings>): Promise<AppSettings> {
     this.settings = { ...this.settings, ...patch }
     await mkdir(dirname(this.path), { recursive: true })
-    const temporary = `${this.path}.tmp`
-    await writeFile(temporary, JSON.stringify(this.settings, null, 2), { encoding: 'utf8', mode: 0o600 })
-    await rename(temporary, this.path)
+    await writeAtomicJson(this.path, this.settings)
     return this.get()
   }
 

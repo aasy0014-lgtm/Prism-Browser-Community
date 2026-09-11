@@ -13,8 +13,20 @@ import { SettingsStore } from './settings-store'
 
 const temporaryPaths: string[] = []
 
+async function removeTemporaryPath(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      await rm(path, { recursive: true, force: true })
+      return
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOTEMPTY' || attempt === 19) throw error
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+  }
+}
+
 afterEach(async () => {
-  await Promise.all(temporaryPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })))
+  await Promise.all(temporaryPaths.splice(0).map(removeTemporaryPath))
 })
 
 class FakeProcessInspector implements ProcessInspector {

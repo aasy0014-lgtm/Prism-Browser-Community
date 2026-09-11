@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process'
-import { createHash, createPublicKey, verify } from 'node:crypto'
-import { createReadStream } from 'node:fs'
-import { lstat, readFile, stat } from 'node:fs/promises'
+import { createPublicKey, verify } from 'node:crypto'
+import { lstat } from 'node:fs/promises'
 import { basename, dirname, resolve } from 'node:path'
 import { promisify } from 'node:util'
+import { hashStableFile, readStableTextFile } from './kernel-integrity'
 import { canonicalJson } from './license-crypto'
 
 const execFileAsync = promisify(execFile)
@@ -26,17 +26,6 @@ export interface SignedProAgentManifest {
 }
 
 export type OsSignatureVerifier = (executablePath: string) => Promise<void>
-
-async function sha256File(path: string): Promise<string> {
-  const hash = createHash('sha256')
-  await new Promise<void>((resolvePromise, reject) => {
-    const stream = createReadStream(path)
-    stream.on('data', (chunk) => hash.update(chunk))
-    stream.on('error', reject)
-    stream.on('end', resolvePromise)
-  })
-  return hash.digest('hex')
-}
 
 function validateManifest(value: unknown): SignedProAgentManifest {
   const manifest = value as Partial<SignedProAgentManifest>
@@ -71,7 +60,7 @@ export async function verifyProAgentBundle(options: {
   const supported = platform === 'darwin' && ['arm64', 'x64'].includes(architecture)
     || platform === 'win32' && architecture === 'x64'
   if (!supported) throw new Error('Prism Pro Agent 当前只支持 macOS arm64/x64 和 Windows x64')
-  const manifest = validateManifest(JSON.parse(await readFile(options.manifestPath, 'utf8')))
+  const manifest = validateManifest(JSON.parse(await readStableTextFile(options.manifestPath)))
   const publicKey = createPublicKey(options.releasePublicKey)
   if (publicKey.asymmetricKeyType !== 'ed25519'
     || !verify(null, Buffer.from(canonicalJson(manifest.payload)), publicKey, Buffer.from(manifest.signature, 'base64'))) {
@@ -80,15 +69,25 @@ export async function verifyProAgentBundle(options: {
   if (manifest.payload.target !== `${platform}-${architecture}`) throw new Error('Prism Pro Agent 与当前系统架构不匹配')
   const expectedPath = resolve(dirname(options.manifestPath), manifest.payload.executableFile)
   const executablePath = expectedPath
-  if ((await lstat(executablePath)).isSymbolicLink()) throw new Error('Prism Pro Agent 不允许使用符号链接')
-  const file = await stat(executablePath)
+  const file = await lstat(executablePath)
+  if (file.isSymbolicLink()) throw new Error('Prism Pro Agent 不允许使用符号链接')
   if (!file.isFile() || file.size !== manifest.payload.executableSize) throw new Error('Prism Pro Agent 文件大小不匹配')
-  if (await sha256File(executablePath) !== manifest.payload.executableSha256) throw new Error('Prism Pro Agent 文件哈希不匹配')
+  let actualHash: string
+  try { actualHash = await hashStableFile(executablePath, manifest.payload.executableSize) }
+  catch { throw new Error('Prism Pro Agent 文件在校验期间发生变化') }
+  if (actualHash !== manifest.payload.executableSha256) throw new Error('Prism Pro Agent 文件哈希不匹配')
   if (options.verifyOsSignature) await options.verifyOsSignature(executablePath)
   else if (platform === 'darwin') await verifyMacCodeSignature(executablePath)
   else if (manifest.payload.osSignaturePolicy === 'authenticode') await verifyWindowsAuthenticode(executablePath)
   else if (manifest.payload.osSignaturePolicy !== 'internal-unsigned') {
     throw new Error('Prism Pro Agent 的 Windows 签名策略无效')
+  }
+  try {
+    if (await hashStableFile(executablePath, manifest.payload.executableSize) !== manifest.payload.executableSha256) {
+      throw new Error('changed')
+    }
+  } catch {
+    throw new Error('Prism Pro Agent 文件在签名校验期间发生变化')
   }
   return { manifest, executablePath }
 }

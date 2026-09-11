@@ -3,6 +3,7 @@ import { access, cp, lstat, mkdir, readdir, readFile, rename, rm, writeFile } fr
 import { basename, join, resolve, sep } from 'node:path'
 import type { BrowserExtension } from '../shared/types'
 import type { Logger } from './app-logger'
+import { writeAtomicJson } from './atomic-file'
 
 interface ChromeExtensionManifest {
   manifest_version?: number
@@ -160,7 +161,7 @@ export class ExtensionStore {
     const current = this.extensions.get(id)
     if (!current) throw new Error('浏览器扩展不存在')
     const next = { ...current, globalEnabled: enabled }
-    await writeFile(join(this.root, id, 'metadata.json'), JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 })
+    await writeAtomicJson(join(this.root, id, 'metadata.json'), next)
     this.extensions.set(id, next)
     this.logger?.info(enabled ? '浏览器扩展已全局启用' : '浏览器扩展已取消全局启用', { extensionId: id })
     return { ...next }

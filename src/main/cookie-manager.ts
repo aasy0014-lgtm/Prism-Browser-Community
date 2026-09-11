@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { readFile, rm } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { lstat, open, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { PortableCookie } from './cookie-file'
 import type { Logger } from './app-logger'
@@ -14,13 +15,33 @@ interface DevToolsPage {
   webSocketDebuggerUrl?: string
 }
 
+const READ_ONLY_NOFOLLOW = process.platform === 'win32' ? 'r' : constants.O_RDONLY | constants.O_NOFOLLOW
+const MAX_DEVTOOLS_PORT_FILE_BYTES = 4 * 1024
+
+export function parseDevToolsPort(value: string): number {
+  const port = Number(value.split(/\r?\n/, 1)[0]?.trim())
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error('invalid DevTools port')
+  return port
+}
+
+export function validateDevToolsWebSocket(value: string, port: number): string {
+  let url: URL
+  try { url = new URL(value) } catch { throw new Error('invalid DevTools WebSocket URL') }
+  if (url.protocol !== 'ws:' || url.hostname !== '127.0.0.1' || url.port !== String(port)
+    || url.username || url.password || !url.pathname.startsWith('/devtools/')) {
+    throw new Error('untrusted DevTools WebSocket URL')
+  }
+  return url.toString()
+}
+
 class CdpClient {
   private sequence = 0
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
 
   private constructor(private readonly socket: WebSocket) {
     socket.addEventListener('message', (event) => {
-      const message = JSON.parse(String(event.data)) as { id?: number; result?: unknown; error?: { message: string } }
+      let message: { id?: number; result?: unknown; error?: { message: string } }
+      try { message = JSON.parse(String(event.data)) as typeof message } catch { return }
       if (!message.id) return
       const request = this.pending.get(message.id)
       if (!request) return
@@ -63,7 +84,13 @@ class CdpClient {
         resolve: (value) => { clearTimeout(timer); resolve(value as T) },
         reject: (error) => { clearTimeout(timer); reject(error) }
       })
-      this.socket.send(JSON.stringify({ id, method, params }))
+      try {
+        this.socket.send(JSON.stringify({ id, method, params }))
+      } catch (error) {
+        this.pending.delete(id)
+        clearTimeout(timer)
+        reject(error instanceof Error ? error : new Error(String(error)))
+      }
     })
   }
 
@@ -76,14 +103,38 @@ async function waitForPage(userDataPath: string): Promise<{ port: number; websoc
   const activePort = join(userDataPath, 'DevToolsActivePort')
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
-      const [portText] = (await readFile(activePort, 'utf8')).split(/\r?\n/)
-      const port = Number(portText)
-      if (!Number.isInteger(port) || port < 1) throw new Error('invalid port')
-      const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(1000) })
+      const metadata = await lstat(activePort)
+      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size < 1 || metadata.size > MAX_DEVTOOLS_PORT_FILE_BYTES) {
+        throw new Error('invalid DevTools port file')
+      }
+      const handle = await open(activePort, READ_ONLY_NOFOLLOW)
+      let portText: string
+      try {
+        const opened = await handle.stat()
+        if (!opened.isFile() || opened.size < 1 || opened.size > MAX_DEVTOOLS_PORT_FILE_BYTES
+          || opened.dev !== metadata.dev || opened.ino !== metadata.ino) throw new Error('unstable DevTools port file')
+        const buffer = Buffer.alloc(MAX_DEVTOOLS_PORT_FILE_BYTES + 1)
+        const { bytesRead } = await handle.read({ buffer, position: 0 })
+        if (bytesRead > MAX_DEVTOOLS_PORT_FILE_BYTES) throw new Error('oversized DevTools port file')
+        portText = buffer.subarray(0, bytesRead).toString('utf8')
+      } finally {
+        await handle.close().catch(() => undefined)
+      }
+      const port = parseDevToolsPort(portText)
+      const response = await fetch(`http://127.0.0.1:${port}/json/list`, {
+        redirect: 'error',
+        signal: AbortSignal.timeout(1000)
+      })
       if (response.ok) {
-        const pages = await response.json() as DevToolsPage[]
+        const pages = await response.json() as unknown
+        if (!Array.isArray(pages)) throw new Error('invalid DevTools target list')
         const page = pages.find((item) => item.type === 'page' && item.webSocketDebuggerUrl)
-        if (page?.webSocketDebuggerUrl) return { port, websocket: page.webSocketDebuggerUrl }
+        const websocket = page && typeof page === 'object' && typeof (page as DevToolsPage).webSocketDebuggerUrl === 'string'
+          ? (page as DevToolsPage).webSocketDebuggerUrl
+          : undefined
+        if (websocket) {
+          return { port, websocket: validateDevToolsWebSocket(websocket, port) }
+        }
       }
     } catch {
       // Chromium may still be starting or may not have written the complete port file yet.
@@ -103,8 +154,9 @@ async function stopChild(child: ChildProcess, inspector?: ProcessInspector, user
   if (child.exitCode === null && child.signalCode === null) {
     if (process.platform === 'win32' && child.pid && inspector && userDataPath) {
       await inspector.terminate(child.pid, userDataPath).catch(() => undefined)
-    } else {
-      child.kill('SIGKILL')
+    }
+    if (child.exitCode === null && child.signalCode === null) {
+      try { child.kill('SIGKILL') } catch { /* The process may have exited between checks. */ }
     }
   }
 }

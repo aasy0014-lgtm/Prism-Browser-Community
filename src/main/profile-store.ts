@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { copyFile, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { BrowserProfile, DeletedProfileSummary, ProfileBatchClassification, ProfileDraft, ProfileStoreHealth, ProxyCheckSummary, WebRtcPolicy } from '../shared/types'
 import { defaultProfileWindow, seedFromId } from '../shared/defaults'
@@ -8,6 +8,7 @@ import { validateProfileDraft } from '../shared/validation'
 import { identitySecretCodec, type SecretCodec } from './secret-codec'
 import { privateProxyConfig, sameProxyIdentity } from './profile-secrets'
 import { safePathSize } from './profile-data'
+import { copyTextAtomic, writeAtomicJson } from './atomic-file'
 
 interface StoreFile {
   schemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11
@@ -685,25 +686,19 @@ export class ProfileStore {
     }
     const operation = this.writeQueue.catch(() => undefined).then(async () => {
       await mkdir(dirname(this.profilesPath), { recursive: true })
-      const temporary = `${this.profilesPath}.tmp`
-      await writeFile(temporary, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 })
-      await rename(temporary, this.profilesPath)
-      const backupTemporary = `${this.backupPath}.tmp`
+      await writeAtomicJson(this.profilesPath, data)
       try {
         if (!this.preservePreviousBackupOnce) {
           try {
-            await copyFile(this.backupPath, this.previousBackupPath)
+            await copyTextAtomic(this.backupPath, this.previousBackupPath)
           } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
           }
         }
-        await copyFile(this.profilesPath, backupTemporary)
-        await rm(this.backupPath, { force: true })
-        await rename(backupTemporary, this.backupPath)
+        await writeAtomicJson(this.backupPath, data)
         this.preservePreviousBackupOnce = false
         this.health = { ...this.health, backupHealthy: true, backupError: undefined }
       } catch (error) {
-        await rm(backupTemporary, { force: true }).catch(() => undefined)
         this.health = {
           ...this.health,
           backupHealthy: false,

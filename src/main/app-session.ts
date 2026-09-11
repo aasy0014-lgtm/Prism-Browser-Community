@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AppRecoveryStatus } from '../shared/types'
+import { writeAtomicJson } from './atomic-file'
 
 interface AppSessionMarker {
   schemaVersion: 1
@@ -96,7 +97,7 @@ export class AppSessionTracker {
             markerCorrupt: true
           }
       history = [...history, previousUnclean].slice(-MAX_UNCLEAN_SESSIONS)
-      await this.writeAtomic(this.historyPath, history)
+      await writeAtomicJson(this.historyPath, history)
     }
 
     const current: AppSessionMarker = {
@@ -107,7 +108,7 @@ export class AppSessionTracker {
       appVersion,
       platform: process.platform
     }
-    await this.writeAtomic(this.markerPath, current)
+    await writeAtomicJson(this.markerPath, current)
     this.snapshotValue = {
       current,
       previousUnclean,
@@ -155,10 +156,4 @@ export class AppSessionTracker {
     }
   }
 
-  private async writeAtomic(path: string, value: unknown): Promise<void> {
-    const temporary = `${path}.${process.pid}.tmp`
-    await writeFile(temporary, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600 })
-    await rm(path, { force: true })
-    await rename(temporary, path)
-  }
 }
