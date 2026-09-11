@@ -52,6 +52,7 @@ import type { AnnouncementStatus, AppRecoveryStatus, AppUpdateStatus, Automation
 import { ProfileEditor } from './ProfileEditor'
 import { KernelManagerModal } from './KernelManagerModal'
 import { ProfileDataModal } from './ProfileDataModal'
+import { ProfileBackupPasswordModal } from './ProfileBackupPasswordModal'
 import { RecycleBinModal } from './RecycleBinModal'
 import { ExtensionManagerModal } from './ExtensionManagerModal'
 import { LaunchDiagnosticsModal } from './LaunchDiagnosticsModal'
@@ -155,6 +156,8 @@ export default function App() {
   const [announcementStatus, setAnnouncementStatus] = useState<AnnouncementStatus | null>(null)
   const [migrationMode, setMigrationMode] = useState<'export' | 'import' | null>(null)
   const [migrationBusy, setMigrationBusy] = useState(false)
+  const [profileBackupPasswordOpen, setProfileBackupPasswordOpen] = useState(false)
+  const [profileBackupBusy, setProfileBackupBusy] = useState(false)
   const [automationOpen, setAutomationOpen] = useState(false)
   const [automationStatus, setAutomationStatus] = useState<AutomationStatus | null>(null)
   const [schedulerOpen, setSchedulerOpen] = useState(false)
@@ -445,10 +448,11 @@ export default function App() {
     }
   }
 
-  async function importProfileBackup(): Promise<void> {
+  async function importProfileBackup(password: string): Promise<void> {
     setImporting(true)
+    setProfileBackupBusy(true)
     try {
-      const imported = await window.browserApi.profiles.importBackup()
+      const imported = await window.browserApi.profiles.importBackup(password)
       if (!imported) return
       upsert(imported.profile)
       messageApi.success(`完整数据已导入为新环境，共 ${imported.result.fileCount} 个文件；请重新填写代理密码`)
@@ -456,17 +460,13 @@ export default function App() {
       messageApi.error(humanError(error), 6)
     } finally {
       setImporting(false)
+      setProfileBackupBusy(false)
+      setProfileBackupPasswordOpen(false)
     }
   }
 
   function confirmProfileBackupImport(): void {
-    Modal.confirm({
-      title: '导入完整环境数据备份',
-      content: '备份会导入为新的独立环境，不覆盖现有数据。代理密码和扩展不会迁移；跨系统导入后部分网站可能需要重新登录。',
-      okText: '选择备份目录',
-      cancelText: '取消',
-      onOk: importProfileBackup
-    })
+    setProfileBackupPasswordOpen(true)
   }
 
   async function runWorkspaceMigration(password: string, conflictPolicy: 'rename' | 'skip'): Promise<void> {
@@ -918,7 +918,7 @@ export default function App() {
           <span><strong>{engine?.fingerprintKernel ? '指纹内核已连接' : '配置浏览器内核'}</strong><small>{engine?.label ?? '正在检查…'}</small></span>
           <SettingOutlined />
         </button>
-        <div className="version">Prism Browser · v{updateStatus?.currentVersion ?? '0.2.0-beta.1'}</div>
+        <div className="version">Prism Browser · v{updateStatus?.currentVersion ?? '0.3.10'}</div>
       </Sider>
 
       <Layout>
@@ -1154,6 +1154,12 @@ export default function App() {
         profileCount={profiles.length}
         onSubmit={runWorkspaceMigration}
         onClose={() => { if (!migrationBusy) setMigrationMode(null) }}
+      />
+      <ProfileBackupPasswordModal
+        mode={profileBackupPasswordOpen ? 'import' : null}
+        busy={profileBackupBusy}
+        onSubmit={importProfileBackup}
+        onClose={() => { if (!profileBackupBusy) setProfileBackupPasswordOpen(false) }}
       />
       <AutomationModal
         open={automationOpen}

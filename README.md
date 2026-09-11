@@ -44,8 +44,10 @@ Prism Browser 是一个基于定制 Chromium 的本地指纹浏览器环境管�
 - User-Agent、语言、时区、屏幕、CPU、内存和 GPU 身份配置
 - Canvas、WebGL、Audio、DOMRect、字体、Speech 与 WebGPU 一致性处理
 - 环境复制、分组、标签、收藏、批量操作和回收站
-- Cookie、完整环境以及全部工作区的本地迁移
+- Cookie、加密的完整环境备份以及全部工作区的本地迁移
 - macOS 环境 Dock 编号及 Windows 任务栏环境编号
+
+完整环境备份使用密码保护的单文件 `.prism-backup` 格式；旧版目录型备份不会被当前版本直接导入。请保留旧备份，并通过旧版本先导出环境配置或 Cookie，再在本版本导入。
 
 ## 已进行的检测
 

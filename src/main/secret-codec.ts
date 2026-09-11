@@ -16,7 +16,7 @@ export class ElectronSecretCodec implements SecretCodec {
     if (safeStorage.isEncryptionAvailable()) {
       return `encrypted:v1:${safeStorage.encryptString(value).toString('base64')}`
     }
-    return `fallback:v1:${Buffer.from(value, 'utf8').toString('base64')}`
+    throw new Error('系统安全存储当前不可用，代理密码未保存')
   }
 
   decode(value: string): string {
@@ -26,6 +26,7 @@ export class ElectronSecretCodec implements SecretCodec {
       return safeStorage.decryptString(Buffer.from(value.slice('encrypted:v1:'.length), 'base64'))
     }
     if (value.startsWith('fallback:v1:')) {
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('系统安全存储当前不可用，旧版代理密码需要重新输入')
       return Buffer.from(value.slice('fallback:v1:'.length), 'base64').toString('utf8')
     }
     return value

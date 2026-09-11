@@ -8,7 +8,11 @@ import { McpControlManager } from './mcp-control-manager'
 import { McpPermissionStore } from './mcp-permission-store'
 
 const roots: string[] = []
-afterEach(async () => { await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true }))) })
+const managers: McpControlManager[] = []
+afterEach(async () => {
+  await Promise.all(managers.splice(0).map((manager) => manager.shutdown()))
+  await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true })))
+})
 
 function profile(id: string, serialNumber: number): BrowserProfile {
   return {
@@ -26,10 +30,21 @@ async function fixture() {
   const audit = new McpAuditLog(root); await audit.initialize()
   const items = [profile('profile-1', 1), profile('profile-2', 2)]
   const profiles = { list: () => items, get: (id: string) => { const item = items.find((value) => value.id === id); if (!item) throw new Error('missing'); return item } }
+  const running = new Set<string>()
   const launcher = {
-    launch: vi.fn(async (id: string) => ({ ...profiles.get(id), status: 'running' as const })),
-    close: vi.fn(async (id: string) => ({ ...profiles.get(id), status: 'closed' as const })),
-    openPage: vi.fn(async (_id: string, url: string) => ({ url, title: 'Test', readyState: 'complete' })),
+    isRunning: vi.fn((id: string) => running.has(id)),
+    launch: vi.fn(async (id: string) => {
+      running.add(id)
+      return { ...profiles.get(id), status: 'running' as const }
+    }),
+    close: vi.fn(async (id: string) => {
+      running.delete(id)
+      return { ...profiles.get(id), status: 'closed' as const }
+    }),
+    openPage: vi.fn(async (id: string, url: string) => {
+      running.add(id)
+      return { url, title: 'Test', readyState: 'complete' }
+    }),
     pageSnapshot: vi.fn(async () => ({ url: 'https://example.com/', title: 'Test', readyState: 'complete', elements: [{ role: 'link', name: 'Next', ref: 'p1-e1' }], truncated: false })),
     clickPageElement: vi.fn(async () => ({ url: 'https://example.com/next', title: 'Next', readyState: 'complete' })),
     typePageElement: vi.fn(async () => ({ url: 'https://example.com/', title: 'Test', readyState: 'complete' }))
@@ -38,7 +53,8 @@ async function fixture() {
   const changed = vi.fn()
   const manager = new McpControlManager(permissions, profiles as never, launcher as never, licensing, audit, changed)
   await manager.initialize()
-  return { root, permissions, audit, items, profiles, launcher, licensing, changed, manager }
+  managers.push(manager)
+  return { root, permissions, audit, items, profiles, launcher, licensing, changed, running, manager }
 }
 
 describe('McpControlManager', () => {
@@ -72,6 +88,33 @@ describe('McpControlManager', () => {
     expect(item.manager.status().message).toContain('1 个')
     item.manager.resetSessions()
     expect(item.manager.status()).toMatchObject({ state: 'stopped' })
+  })
+
+  it('stops only environments launched by MCP', async () => {
+    const item = await fixture()
+    await item.manager.setPermission('profile-1', true)
+    await item.launcher.launch('profile-2')
+    await item.manager.handleAgentRequest('mcp.profiles.launch', { profileId: 'profile-1' }, 'mcp-launch')
+
+    await item.manager.emergencyStop()
+
+    expect(item.launcher.close).toHaveBeenCalledWith('profile-1')
+    expect(item.launcher.close).not.toHaveBeenCalledWith('profile-2')
+    expect(item.running).toEqual(new Set(['profile-2']))
+  })
+
+  it('removes controlled environments after normal or unexpected termination', async () => {
+    const item = await fixture()
+    await item.manager.setPermission('profile-1', true)
+    await item.manager.handleAgentRequest('mcp.profiles.launch', { profileId: 'profile-1' }, 'mcp-launch')
+    expect(item.manager.status().controlledProfileIds).toEqual(['profile-1'])
+
+    item.running.delete('profile-1')
+    expect(item.manager.status().controlledProfileIds).toEqual([])
+
+    await item.manager.handleAgentRequest('mcp.profiles.launch', { profileId: 'profile-1' }, 'mcp-relaunch')
+    item.running.delete('profile-1')
+    expect(item.manager.status().controlledProfileIds).toEqual([])
   })
 
   it('keeps page actions behind the same per-profile permission and omits page data from audit', async () => {

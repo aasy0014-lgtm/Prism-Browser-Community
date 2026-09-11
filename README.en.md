@@ -44,8 +44,10 @@ Every profile uses an independent user-data directory. Duplicating a profile pre
 - User-Agent, language, time zone, screen, CPU, memory, and GPU identity configuration
 - Consistent Canvas, WebGL, Audio, DOMRect, font, Speech, and WebGPU surfaces
 - Profile duplication, groups, tags, favorites, bulk operations, and trash
-- Local migration of cookies, individual profiles, or the complete workspace
+- Local migration of cookies, encrypted individual profile backups, or the complete workspace
 - Numbered profile Dock icons on macOS and taskbar icons on Windows
+
+Complete profile backups use a password-protected single-file `.prism-backup` format. Directory backups from older versions are not imported directly by the current version; keep the original and use the older version to export the profile configuration or cookies first.
 
 ## Verification Coverage
 

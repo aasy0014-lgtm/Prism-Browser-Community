@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-17T06:50:45.541Z",
+  "generatedAt": "2026-09-11T04:35:12.855Z",
   "edition": "community-source",
   "files": [
     {
@@ -15,13 +15,18 @@
     },
     {
       "path": "README.en.md",
-      "size": 10262,
-      "sha256": "79c3b18f9efae2282f68f3cfa6324ada038325bddf1479c4335133dbd2cc1415"
+      "size": 10552,
+      "sha256": "4df2630b6e3df021962df2aa300a6cdb822739bd4c960c75fa48f122089c971d"
     },
     {
       "path": "README.md",
-      "size": 9152,
-      "sha256": "c565efb205445f1b7a19edb18edfb00d870fb9635ac2ad60d5de310ec74be873"
+      "size": 9397,
+      "sha256": "93bf743c3374db6b4a345007472c36d5ba947107cbe28e5658d0377ebf622e1f"
+    },
+    {
+      "path": "SECURITY.md",
+      "size": 832,
+      "sha256": "160268e3c69979e63bb486fece3d51cc412a92d6b7def3a827b90b69735c06b1"
     },
     {
       "path": "build/entitlements.mac.inherit.plist",
@@ -120,13 +125,13 @@
     },
     {
       "path": "package-lock.json",
-      "size": 258355,
-      "sha256": "021174a094a5a01fe2de8fd2f41ccc7fefec0d6ac44838644f8b70fa2d3fee01"
+      "size": 258367,
+      "sha256": "ca695e0a878f3f5af0e3dc6355c500cc2a06f53a3b173c5013296a1d6daf3f68"
     },
     {
       "path": "package.json",
-      "size": 4744,
-      "sha256": "8333369870f96993259ffe078b0f0a1350b4714721c8033a073491e88ef76e05"
+      "size": 4738,
+      "sha256": "43e7dcaed02c6ac9c30f12d594cd761983cc1f84f7cd24e54d3055358daeb326"
     },
     {
       "path": "src/main/announcement-manager.ts",
@@ -154,9 +159,14 @@
       "sha256": "d015dc2e7d62ed305778d262788c572c1a126ebca74a8000681058aa285b0c4e"
     },
     {
+      "path": "src/main/browser-control-session.test.ts",
+      "size": 3598,
+      "sha256": "49da8e3745969786bea349e20582b7e08a0836343b41448075a2b978111dc823"
+    },
+    {
       "path": "src/main/browser-control-session.ts",
-      "size": 12404,
-      "sha256": "de6b51e6225fdd510f88e947184ab66908abacfa2adf8f275758274113766708"
+      "size": 13245,
+      "sha256": "5a45c5cad6b3686a9da21359fd221f52e5a16e4473a977038a8f859bf147d197"
     },
     {
       "path": "src/main/browser-launcher.test.ts",
@@ -189,9 +199,14 @@
       "sha256": "bc8ad46a069a21719bba5298d94b5238aad00e07853579cd610ff4bb28ca8e17"
     },
     {
+      "path": "src/main/cookie-manager.test.ts",
+      "size": 2452,
+      "sha256": "55f0190ca57e910f950ae42b6a0987a1608a53c60a2f07fa55d29ac13efa8ae5"
+    },
+    {
       "path": "src/main/cookie-manager.ts",
-      "size": 7351,
-      "sha256": "a93cf9a53820c45618bdbf98818bcce46b3879c9d9d7237f8c1ef236e9f9da30"
+      "size": 8257,
+      "sha256": "161cfb3492fbd9fcd7b290b2863a62edc762cd6414468ea51d0907122d2e614f"
     },
     {
       "path": "src/main/device-identity.ts",
@@ -205,13 +220,13 @@
     },
     {
       "path": "src/main/extension-store.test.ts",
-      "size": 2229,
-      "sha256": "fd0df3a5a81ae0e82634652f786e1a0fbbb12a7753004d78266f1d30f296f007"
+      "size": 3219,
+      "sha256": "6419d3e648fd2bac9f332c225853f88a49af3455cb243f215e6e885719bc021d"
     },
     {
       "path": "src/main/extension-store.ts",
-      "size": 5955,
-      "sha256": "3421d16277946eadf24f8013463396711f70eff20f4057b88b8bb0816ef44140"
+      "size": 7280,
+      "sha256": "2cb0085e98b5bf3e3284f7309c00c0472de477b5790b0362ae7232e70ac53f4d"
     },
     {
       "path": "src/main/host-hardware.ts",
@@ -220,13 +235,13 @@
     },
     {
       "path": "src/main/index.ts",
-      "size": 9243,
-      "sha256": "8251650c4be2f95b9117911048f8b7fa26fcf7b086732349d6c15a460fdb9fe3"
+      "size": 9775,
+      "sha256": "1ebce786b568cb28d2803f376ee1a44282f336eb3d754431722c9728828e1d34"
     },
     {
       "path": "src/main/ipc.ts",
-      "size": 24010,
-      "sha256": "b965eceb05ba5a73e03de9cf678a347cda06ca34fca25605bfb9da2d6a6f3817"
+      "size": 24740,
+      "sha256": "bb78ec9b0e3dbc399bd9ffeeb21d7180d036e98f926210f63ed285ad2cfe236c"
     },
     {
       "path": "src/main/kernel-catalog.ts",
@@ -265,13 +280,13 @@
     },
     {
       "path": "src/main/mcp-control-manager.test.ts",
-      "size": 7351,
-      "sha256": "f67c8a06ae4f895c46a9890e1f750bb64a8daf25fe2f52bff279d13b8ed179b1"
+      "size": 8955,
+      "sha256": "0a48101e97175fa37ad0c63676b697f86e465202be315cda4eef7f3dc5e9575c"
     },
     {
       "path": "src/main/mcp-control-manager.ts",
-      "size": 7435,
-      "sha256": "cee6539fd3094a0d1d749c1c9a45fe8f5cc9058128f617bd2656a43e95e26439"
+      "size": 7994,
+      "sha256": "18e62371a0d3020b96073b3447ce550db8cfc14ab7188ea15c3077430c50c215"
     },
     {
       "path": "src/main/mcp-permission-store.ts",
@@ -305,13 +320,13 @@
     },
     {
       "path": "src/main/profile-backup.test.ts",
-      "size": 4435,
-      "sha256": "3d637535153d8e5cbc4ae2fecbc09840b528b6071919401773b1817932e4e2d8"
+      "size": 5424,
+      "sha256": "5af06f9256380d6d53c24fc810826e6579375d80f85d3bbdd47894832c659524"
     },
     {
       "path": "src/main/profile-backup.ts",
-      "size": 8945,
-      "sha256": "76b18ba4ca656f76125ff65a05d722a551608baf15564c42fbda14bdd48fa188"
+      "size": 20233,
+      "sha256": "54ab0708bbea9120b2a896d3e8fe5ef1576485521158f7567d2e5c73309df49a"
     },
     {
       "path": "src/main/profile-batch-csv.ts",
@@ -379,6 +394,16 @@
       "sha256": "df2f63953bec0bbba1936501160c52a962ec377637f94e321ec6e48993286f61"
     },
     {
+      "path": "src/main/renderer-security.test.ts",
+      "size": 2680,
+      "sha256": "63c52042b626ad2233d5ac6509f925d288c1075bcbd538ebb3c498079dbe2b32"
+    },
+    {
+      "path": "src/main/renderer-security.ts",
+      "size": 1307,
+      "sha256": "d9fe2f2c18538b3673393eece92def546b6ddddba45196af03413a3ece19ec12"
+    },
+    {
       "path": "src/main/scheduler-audit.ts",
       "size": 1494,
       "sha256": "9ea8b96d1abf825e910efa5530eb6b3f31282e63ade3ab1619c47ed80103aabb"
@@ -400,8 +425,8 @@
     },
     {
       "path": "src/main/secret-codec.ts",
-      "size": 1078,
-      "sha256": "a2422c83749c422ff8671e107a514b22bda36db220172825dd8c4b52e8540544"
+      "size": 1225,
+      "sha256": "efa4c0a7c1d1f0350a1da937a6dadd3ccdac62434b49ef421be597714c1333f3"
     },
     {
       "path": "src/main/settings-store.test.ts",
@@ -430,18 +455,18 @@
     },
     {
       "path": "src/preload/index.ts",
-      "size": 8205,
-      "sha256": "8e3607824e48ee6a0e66815830e73b72193e44762819dfd03ccff3853b300389"
+      "size": 8476,
+      "sha256": "82e934c258d19a58192c4984eb5211ecf02faa03a0b91ebf7e8b2f0e8f2b22a4"
     },
     {
       "path": "src/renderer/index.html",
-      "size": 352,
-      "sha256": "06bf191212c8787c26ec3d622ff7abde871547550996245ad53db19f54aafd39"
+      "size": 752,
+      "sha256": "c5f94433eb147b871af9a598f456277e207d2cbb6c71f8d988012ab048d56762"
     },
     {
       "path": "src/renderer/src/App.tsx",
-      "size": 53906,
-      "sha256": "9ac85336ca832c46e48e4979ba3d4010141eefd02ad597c4a441c72732997b46"
+      "size": 54539,
+      "sha256": "3460b242551441683c496df1eb6b64061f7f47f7bf4d299b98920e5a09bc5d8f"
     },
     {
       "path": "src/renderer/src/AutomationModal.tsx",
@@ -460,8 +485,8 @@
     },
     {
       "path": "src/renderer/src/ExtensionManagerModal.tsx",
-      "size": 4261,
-      "sha256": "b92fdcbb979e82875bf73d4384283150d97c9368b0bc793993a9f8b093d08338"
+      "size": 6474,
+      "sha256": "e7eb0bc705f7b9fe7008412bb2a2d58c73976aa89f7740a01710d9d92c3ec6e1"
     },
     {
       "path": "src/renderer/src/KernelManagerModal.tsx",
@@ -484,9 +509,14 @@
       "sha256": "6c913a6eeb70fee391b28acd9fb624b48dde5e6b7ab0ae56f79d1f08eb1332ff"
     },
     {
+      "path": "src/renderer/src/ProfileBackupPasswordModal.tsx",
+      "size": 2912,
+      "sha256": "f349f52a9135a3ba5224e101dc86c7a807d5e6adbe8284440f5da63dfbbf544b"
+    },
+    {
       "path": "src/renderer/src/ProfileDataModal.tsx",
-      "size": 6450,
-      "sha256": "92c6dd2b4fa71aa13d0a9c9a3d423b0bd016a8b326b39c240606471f338b14c1"
+      "size": 7033,
+      "sha256": "10429ef0a110a51072b4e2c2a77f1e9c665306e3179e19274937ff1d09ae2a49"
     },
     {
       "path": "src/renderer/src/ProfileEditor.tsx",
@@ -532,6 +562,16 @@
       "path": "src/renderer/src/main.tsx",
       "size": 847,
       "sha256": "517173d7ccba53f8e8bfba0859e4ac724764714c69b53ad3b7df1fbf603a5d24"
+    },
+    {
+      "path": "src/renderer/src/profile-table-sort.test.ts",
+      "size": 2776,
+      "sha256": "0e0d9fb64e7627afd40d609a39577da585dc2467a6fa591facce1b5537833af1"
+    },
+    {
+      "path": "src/renderer/src/profile-table-sort.ts",
+      "size": 2406,
+      "sha256": "c254884faedf9ab66e4f449817507822fe1091366172fa8aaa935d588aa97273"
     },
     {
       "path": "src/renderer/src/styles.css",
@@ -580,8 +620,8 @@
     },
     {
       "path": "src/shared/types.ts",
-      "size": 15002,
-      "sha256": "3ee0a300b7778a44cf656515dda02a52166c04721266cc66d7e3f253e6446abe"
+      "size": 15288,
+      "sha256": "b88169f6eee3e41eaaf406cbec3b9d1713c67b64fa4248d5e60866b88f4cfb3c"
     },
     {
       "path": "src/shared/validation.test.ts",

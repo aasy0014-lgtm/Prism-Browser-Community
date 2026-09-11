@@ -6,6 +6,7 @@ import type { Logger } from './app-logger'
 import { locateBrowserForProfile } from './browser-locator'
 import type { ProfileStore } from './profile-store'
 import type { SettingsStore } from './settings-store'
+import { findManagedProcess, SystemProcessInspector, type ProcessInspector } from './process-inspector'
 
 interface DevToolsPage {
   type: string
@@ -107,7 +108,8 @@ export class CookieManager {
   constructor(
     private readonly profiles: ProfileStore,
     private readonly settings: SettingsStore,
-    private readonly logger?: Logger
+    private readonly logger?: Logger,
+    private readonly processInspector: ProcessInspector = new SystemProcessInspector()
   ) {}
 
   isBusy(id: string): boolean {
@@ -115,7 +117,7 @@ export class CookieManager {
   }
 
   async exportCookies(id: string): Promise<PortableCookie[]> {
-    const profile = this.ensureClosed(id)
+    await this.ensureClosed(id)
     const cookies = await this.withSession(id, async (client) => {
       const result = await client.send<{ cookies: PortableCookie[] }>('Network.getAllCookies')
       return result.cookies
@@ -125,7 +127,7 @@ export class CookieManager {
   }
 
   async importCookies(id: string, cookies: PortableCookie[]): Promise<number> {
-    this.ensureClosed(id)
+    await this.ensureClosed(id)
     const defaultExpires = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60
     const persistentCookies = cookies.map((cookie) => ({ ...cookie, expires: cookie.expires ?? defaultExpires }))
     await this.withSession(id, (client) => client.send('Network.setCookies', { cookies: persistentCookies }))
@@ -133,10 +135,10 @@ export class CookieManager {
     return cookies.length
   }
 
-  private ensureClosed(id: string) {
+  private async ensureClosed(id: string): Promise<void> {
     const profile = this.profiles.get(id)
     if (profile.status !== 'closed' && profile.status !== 'error') throw new Error('请先关闭浏览器环境再管理 Cookie')
-    return profile
+    await this.assertNoExternalProcess(id)
   }
 
   private async withSession<T>(id: string, action: (client: CdpClient) => Promise<T>): Promise<T> {
@@ -144,7 +146,9 @@ export class CookieManager {
     this.busyProfiles.add(id)
     try {
       const profile = this.profiles.get(id)
+      if (profile.status !== 'closed' && profile.status !== 'error') throw new Error('请先关闭浏览器环境再管理 Cookie')
       await this.profiles.assertProfileDataIdentity(id)
+      await this.assertNoExternalProcess(id)
       const engine = await locateBrowserForProfile(this.settings, this.profiles.vaultPath, profile.kernelVersion)
       if (!engine.executable) {
         throw new Error(profile.kernelVersion
@@ -184,5 +188,16 @@ export class CookieManager {
     } finally {
       this.busyProfiles.delete(id)
     }
+  }
+
+  private async assertNoExternalProcess(id: string): Promise<void> {
+    let processes
+    try {
+      processes = await this.processInspector.list()
+    } catch {
+      throw new Error('无法检查浏览器进程占用状态，为保护 Cookie 数据已取消操作')
+    }
+    const process = findManagedProcess(processes, this.profiles.profileDataPath(id))
+    if (process) throw new Error(`请先关闭浏览器环境；检测到仍占用数据目录的进程（PID ${process.pid}）`)
   }
 }

@@ -54,7 +54,13 @@ export class PipeCdpTransport implements CdpTransport {
         resolve: (value) => resolve(value as T),
         reject
       })
-      this.writable.write(`${JSON.stringify(payload)}\0`)
+      try {
+        this.writable.write(`${JSON.stringify(payload)}\0`)
+      } catch (error) {
+        this.pending.delete(id)
+        clearTimeout(timer)
+        reject(error instanceof Error ? error : new Error(String(error)))
+      }
     })
   }
 
@@ -146,8 +152,7 @@ export class BrowserControlSession {
 
   async open(urlValue: string): Promise<{ url: string; title: string; readyState: string }> {
     const url = validateWebUrl(urlValue)
-    const created = await this.cdp.send<{ targetId: string }>('Target.createTarget', { url: 'about:blank' })
-    await this.attach(created.targetId)
+    await this.ensureOpenTarget()
     const navigation = await this.cdp.send<{ errorText?: string }>('Page.navigate', { url }, this.sessionId)
     if (navigation.errorText) throw new Error(`无法打开网页：${navigation.errorText}`)
     await this.waitForDocument()
@@ -241,6 +246,7 @@ export class BrowserControlSession {
   }
 
   private async ensurePage(): Promise<void> {
+    const hadTarget = Boolean(this.targetId || this.sessionId)
     if (this.targetId && this.sessionId) {
       try {
         await this.cdp.send('Target.getTargetInfo', { targetId: this.targetId })
@@ -248,12 +254,33 @@ export class BrowserControlSession {
       } catch {
         this.targetId = undefined
         this.sessionId = undefined
+        this.references.clear()
       }
+    }
+    if (hadTarget) {
+      const created = await this.cdp.send<{ targetId: string }>('Target.createTarget', { url: 'about:blank' })
+      await this.attach(created.targetId)
+      return
     }
     const targets = await this.cdp.send<{ targetInfos: TargetInfo[] }>('Target.getTargets')
     const pages = (targets.targetInfos ?? []).filter((target) => target.type === 'page' && !target.url.startsWith('devtools:'))
     const target = pages[pages.length - 1] ?? await this.cdp.send<{ targetId: string }>('Target.createTarget', { url: 'about:blank' })
     await this.attach(target.targetId)
+  }
+
+  private async ensureOpenTarget(): Promise<void> {
+    if (this.targetId && this.sessionId) {
+      try {
+        await this.cdp.send('Target.getTargetInfo', { targetId: this.targetId })
+        return
+      } catch {
+        this.targetId = undefined
+        this.sessionId = undefined
+        this.references.clear()
+      }
+    }
+    const created = await this.cdp.send<{ targetId: string }>('Target.createTarget', { url: 'about:blank' })
+    await this.attach(created.targetId)
   }
 
   private async attach(targetId: string): Promise<void> {

@@ -26,6 +26,7 @@ import { McpPermissionStore } from './mcp-permission-store'
 import { McpAuditLog } from './mcp-audit'
 import { McpControlManager } from './mcp-control-manager'
 import { AnnouncementManager } from './announcement-manager'
+import { isTrustedRendererUrl } from './renderer-security'
 
 let mainWindow: BrowserWindow | null = null
 let launcher: BrowserLauncher | null = null
@@ -65,8 +66,18 @@ function createWindow(): BrowserWindow {
   window.webContents.on('did-fail-load', (_event, code, description, url) => {
     logger?.error('Renderer load failed', { code, description, url })
   })
+  const preventUntrustedNavigation = (event: Electron.Event, url: string): void => {
+    if (!isTrustedRendererUrl(url)) event.preventDefault()
+  }
+  window.webContents.on('will-navigate', preventUntrustedNavigation)
+  window.webContents.on('will-redirect', preventUntrustedNavigation)
   window.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') void shell.openExternal(url)
+    } catch {
+      // Ignore malformed or unsupported external URLs.
+    }
     return { action: 'deny' }
   })
 

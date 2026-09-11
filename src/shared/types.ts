@@ -427,8 +427,8 @@ export interface BrowserApi {
     storageOverview: () => Promise<StorageOverview>
     openDataFolder: (id: string) => Promise<void>
     clearCache: (id: string) => Promise<ProfileStorageInfo>
-    exportBackup: (id: string) => Promise<ProfileBackupResult | null>
-    importBackup: () => Promise<{ profile: BrowserProfileView; result: ProfileBackupResult } | null>
+    exportBackup: (id: string, password: string) => Promise<ProfileBackupResult | null>
+    importBackup: (password: string) => Promise<{ profile: BrowserProfileView; result: ProfileBackupResult } | null>
     exportWorkspace: (password: string) => Promise<WorkspaceMigrationResult | null>
     importWorkspace: (password: string, conflictPolicy: 'rename' | 'skip') => Promise<WorkspaceMigrationResult | null>
     trash: () => Promise<DeletedProfileSummary[]>

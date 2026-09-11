@@ -13,7 +13,7 @@ afterEach(async () => {
 })
 
 describe('ProfileBackupManager', () => {
-  it('exports a password-free manifest and imports browser data as a new environment', async () => {
+  it('encrypts the manifest and browser data before importing as a new environment', async () => {
     const vault = await mkdtemp(join(tmpdir(), 'prism-backup-vault-'))
     const destination = await mkdtemp(join(tmpdir(), 'prism-backup-output-'))
     temporaryPaths.push(vault, destination)
@@ -40,13 +40,14 @@ describe('ProfileBackupManager', () => {
     }
     const manager = new ProfileBackupManager(profiles, '0.1.0')
 
-    const exported = await manager.export(source.id, destination)
-    const manifestText = await readFile(join(exported.path, 'manifest.json'), 'utf8')
-    expect(manifestText).not.toContain('secret-password')
-    expect(JSON.parse(manifestText).profile.extensionIds).toEqual([])
-    expect(JSON.parse(manifestText).contentSha256).toMatch(/^[a-f\d]{64}$/)
+    const archive = join(destination, 'profile.prism-backup')
+    const exported = await manager.export(source.id, archive, 'correct horse battery staple')
+    const archiveBytes = await readFile(exported.path)
+    expect(archiveBytes.includes(Buffer.from('secret-password'))).toBe(false)
+    expect(archiveBytes.includes(Buffer.from('session-data'))).toBe(false)
+    expect(archiveBytes.includes(Buffer.from('迁移环境'))).toBe(false)
 
-    const imported = await manager.import(exported.path)
+    const imported = await manager.import(exported.path, 'correct horse battery staple')
     expect(imported.profile.id).not.toBe(source.id)
     expect(imported.profile.name).toContain('迁移')
     expect(imported.profile.proxy.password).toBe('')
@@ -54,36 +55,46 @@ describe('ProfileBackupManager', () => {
     for (const [relativePath, content] of browserData) {
       await expect(readFile(join(profiles.profileDataPath(imported.profile.id), relativePath), 'utf8')).resolves.toBe(content)
     }
-    expect(await readdir(exported.path)).not.toContain('profile-owner.json')
     expect(JSON.parse(await readFile(profiles.profileOwnerPath(imported.profile.id), 'utf8')).profileId).toBe(imported.profile.id)
 
     const profileCount = profiles.list().length
-    await writeFile(join(exported.path, 'user-data', 'Default', 'Cookies.test'), 'changed-data')
-    await expect(manager.import(exported.path)).rejects.toThrow('SHA-256')
+    const tampered = join(destination, 'tampered.prism-backup')
+    const tamperedBytes = Buffer.from(archiveBytes)
+    tamperedBytes[tamperedBytes.length - 1] ^= 0xff
+    await writeFile(tampered, tamperedBytes)
+    await expect(manager.import(tampered, 'correct horse battery staple')).rejects.toThrow(/损坏|认证|authenticate/)
     expect(profiles.list()).toHaveLength(profileCount)
     expect(await profiles.listTrash()).toHaveLength(0)
     expect((await readdir(vault)).filter((name) => name.startsWith('.profile-backup-import-'))).toEqual([])
   })
 
-  it('rejects unsafe manifest limits before creating an imported environment', async () => {
+  it('rejects an unencrypted legacy backup before creating an imported environment', async () => {
     const vault = await mkdtemp(join(tmpdir(), 'prism-backup-vault-'))
     const source = await mkdtemp(join(tmpdir(), 'prism-backup-input-'))
     temporaryPaths.push(vault, source)
     const profiles = new ProfileStore(vault)
     await profiles.initialize()
     await mkdir(join(source, 'user-data'))
-    await writeFile(join(source, 'manifest.json'), JSON.stringify({
-      schemaVersion: 1,
-      exportedAt: new Date().toISOString(),
-      sourcePlatform: process.platform,
-      sourceAppVersion: '0.1.0',
-      totalBytes: Number.MAX_SAFE_INTEGER,
-      fileCount: 0,
-      profile: defaultProfileDraft()
-    }))
+    await writeFile(join(source, 'manifest.json'), JSON.stringify({ schemaVersion: 1, profile: defaultProfileDraft() }))
 
     const manager = new ProfileBackupManager(profiles, '0.1.0')
-    await expect(manager.import(source)).rejects.toThrow('超出安全范围')
+    await expect(manager.import(source, 'correct horse battery staple')).rejects.toThrow('加密备份文件无效')
     expect(profiles.list()).toHaveLength(0)
+  })
+
+  it('round-trips a profile with an empty data directory', async () => {
+    const vault = await mkdtemp(join(tmpdir(), 'prism-backup-empty-vault-'))
+    const destination = await mkdtemp(join(tmpdir(), 'prism-backup-empty-output-'))
+    temporaryPaths.push(vault, destination)
+    const profiles = new ProfileStore(vault)
+    await profiles.initialize()
+    const source = await profiles.create(defaultProfileDraft())
+    const manager = new ProfileBackupManager(profiles, '0.3.10')
+
+    const exported = await manager.export(source.id, join(destination, 'empty.prism-backup'), 'correct horse battery staple')
+    expect(exported).toMatchObject({ fileCount: 0, totalBytes: 0 })
+    const imported = await manager.import(exported.path, 'correct horse battery staple')
+    expect(imported.result).toMatchObject({ fileCount: 0, totalBytes: 0 })
+    await expect(readdir(profiles.profileDataPath(imported.profile.id))).resolves.toEqual([])
   })
 })

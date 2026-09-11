@@ -45,9 +45,14 @@ export class McpControlManager {
     return result
   }
 
-  async removeProfile(profileId: string): Promise<void> { await this.permissions.remove(profileId) }
+  async removeProfile(profileId: string): Promise<void> {
+    const wasControlled = this.controlled.delete(profileId)
+    await this.permissions.remove(profileId)
+    if (wasControlled) this.changed()
+  }
 
   status(agentRunning = this.sessions.size > 0): McpStatus {
+    this.pruneControlled()
     const enabledProfileIds = this.profiles.list().filter((profile) => this.permissions.enabled(profile.id)).map((profile) => profile.id)
     return {
       state: this.sessions.size ? 'running' : agentRunning ? 'ready' : 'stopped',
@@ -58,8 +63,9 @@ export class McpControlManager {
   }
 
   resetSessions(): void {
-    if (!this.sessions.size) return
+    if (!this.sessions.size && !this.controlled.size) return
     this.sessions.clear()
+    this.controlled.clear()
     this.changed()
   }
 
@@ -100,16 +106,20 @@ export class McpControlManager {
         return result
       }
       if (method === 'mcp.profiles.launch') {
+        const wasRunning = this.launcher.isRunning(profileId)
         const profile = await this.launcher.launch(profileId)
-        this.controlled.add(profileId); this.changed()
+        if (!wasRunning) this.controlled.add(profileId)
+        this.changed()
         const result = publicMcpProfile(profile)
         this.audit.record({ action, outcome: 'success', requestId, profileId })
         return result
       }
       if (method === 'mcp.pages.open') {
         if (typeof params?.url !== 'string') throw new Error('网页地址无效')
+        const wasRunning = this.launcher.isRunning(profileId)
         const result = await this.launcher.openPage(profileId, params.url)
-        this.controlled.add(profileId); this.changed()
+        if (!wasRunning) this.controlled.add(profileId)
+        this.changed()
         this.audit.record({ action, outcome: 'success', requestId, profileId })
         return result
       }
@@ -153,8 +163,15 @@ export class McpControlManager {
 
   async shutdown(): Promise<void> {
     this.sessions.clear()
+    this.controlled.clear()
     await this.audit.flush()
   }
 
   private changed(): void { this.onChanged(this.status()) }
+
+  private pruneControlled(): void {
+    for (const profileId of this.controlled) {
+      if (!this.launcher.isRunning(profileId)) this.controlled.delete(profileId)
+    }
+  }
 }
