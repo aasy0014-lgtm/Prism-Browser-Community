@@ -33,6 +33,7 @@ type SpawnAgent = typeof spawn
 interface McpRequestBroker {
   handleAgentRequest(method: string, params: Record<string, unknown> | undefined, requestId: string): Promise<unknown>
   status(agentRunning?: boolean): McpStatus
+  emergencyStop(): Promise<McpStatus>
   resetSessions(): void
 }
 
@@ -87,6 +88,7 @@ export class ProAgentManager {
   private mcpAccessToken = ''
   private mcpTokenExposed = false
   private agentExecutable = ''
+  private exitCleanup: Promise<void> | null = null
 
   constructor(
     private readonly profiles: ProfileStore,
@@ -129,8 +131,14 @@ export class ProAgentManager {
   async start(): Promise<AutomationStartResult> {
     if (this.current.state === 'running') throw new Error('本地自动化 API 已经在运行；如需新令牌，请先停止后重新启动')
     if (this.starting) return this.starting
-    this.starting = this.startInternal()
-    try { return await this.starting } finally { this.starting = null }
+    const operation = (async () => {
+      await this.exitCleanup?.catch(() => undefined)
+      return this.startInternal()
+    })()
+    this.starting = operation
+    try { return await operation } finally {
+      if (this.starting === operation) this.starting = null
+    }
   }
 
   private async startInternal(): Promise<AutomationStartResult> {
@@ -201,11 +209,16 @@ export class ProAgentManager {
         })
         child.once('error', (error) => fail(error))
         child.once('exit', (code, signal) => {
-          this.child = null
+          const isCurrentChild = this.child === child
+          if (isCurrentChild) this.child = null
           if (!settled) fail(new Error(`Prism Pro Agent 在就绪前退出（code=${code ?? '-'}, signal=${signal ?? '-'}）`))
-          this.mcpBroker?.resetSessions()
-          if (this.expectedStop) this.setStatus({ state: 'stopped', message: '本地自动化 API 已停止', controlledProfileIds: [] })
-          else this.setStatus({ state: 'error', message: '本地自动化 API 意外停止，请重新启动', controlledProfileIds: [...this.controlled] })
+          if (this.expectedStop) {
+            this.mcpBroker?.resetSessions()
+            if (isCurrentChild) this.setStatus({ state: 'stopped', message: '本地自动化 API 已停止', controlledProfileIds: [] })
+          } else if (isCurrentChild) {
+            this.scheduleUnexpectedExitCleanup()
+            this.setStatus({ state: 'error', message: '本地自动化 API 意外停止，请重新启动', controlledProfileIds: [...this.controlled] })
+          }
         })
       })
       return result
@@ -275,8 +288,9 @@ export class ProAgentManager {
         if (!validProfileId(profileId)) throw new Error('环境 ID 无效')
         if (method === 'profiles.status') result = publicAutomationProfile(this.profiles.get(profileId))
         else if (method === 'profiles.launch') {
+          const wasRunning = this.launcher.isRunning(profileId)
           result = publicAutomationProfile(await this.launcher.launch(profileId))
-          this.controlled.add(profileId)
+          if (!wasRunning) this.controlled.add(profileId)
           this.notifyCurrent()
         } else {
           result = publicAutomationProfile(await this.launcher.close(profileId))
@@ -303,9 +317,16 @@ export class ProAgentManager {
       })
       if (!exited) child.kill('SIGKILL')
     }
+    await this.exitCleanup?.catch(() => undefined)
     if (emergency) {
-      await Promise.allSettled([...this.controlled].map((id) => this.launcher.close(id)))
-      this.audit.record({ action: 'emergency-stop', outcome: 'success' })
+      const cleanup = await Promise.allSettled([
+        this.mcpBroker?.emergencyStop() ?? Promise.resolve(),
+        ...[...this.controlled].map((id) => this.launcher.close(id))
+      ])
+      this.audit.record({
+        action: 'emergency-stop',
+        outcome: cleanup.some((result) => result.status === 'rejected') ? 'failure' : 'success'
+      })
     } else this.audit.record({ action: 'agent-stop', outcome: 'success' })
     this.controlled.clear()
     this.mcpAccessToken = ''
@@ -320,6 +341,39 @@ export class ProAgentManager {
   private write(value: unknown): void {
     if (!this.child?.stdin.writable) throw new Error('Prism Pro Agent 通道不可用')
     this.child.stdin.write(`${JSON.stringify(value)}\n`)
+  }
+
+  private scheduleUnexpectedExitCleanup(): void {
+    const cleanup = this.cleanupAfterUnexpectedExit()
+    this.exitCleanup = cleanup
+    void cleanup
+      .catch((error) => {
+        this.logger?.error('Prism Pro Agent 意外退出后的资源清理失败', error)
+      })
+      .finally(() => {
+        if (this.exitCleanup === cleanup) this.exitCleanup = null
+      })
+  }
+
+  private async cleanupAfterUnexpectedExit(): Promise<void> {
+    this.mcpAccessToken = ''
+    this.mcpTokenExposed = false
+    this.agentExecutable = ''
+    const controlled = [...this.controlled]
+    const cleanup = await Promise.allSettled([
+      this.mcpBroker?.emergencyStop() ?? Promise.resolve(),
+      ...controlled.map((profileId) => this.launcher.close(profileId))
+    ])
+    this.mcpBroker?.resetSessions()
+    this.controlled.clear()
+    this.notifyCurrent()
+    const failed = cleanup.filter((result) => result.status === 'rejected')
+    this.audit.record({
+      action: 'emergency-stop',
+      outcome: failed.length ? 'failure' : 'success',
+      detail: failed.length ? `Agent 意外退出后有 ${failed.length} 项资源清理失败` : 'Agent 意外退出后已关闭受控环境并清理 MCP 会话'
+    })
+    if (failed.length) throw new Error(`Agent 意外退出后有 ${failed.length} 项资源清理失败`)
   }
 
   private notifyCurrent(): void { this.onChanged(this.status()) }

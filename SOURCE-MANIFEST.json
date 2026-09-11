@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-11T04:35:12.855Z",
+  "generatedAt": "2026-09-11T09:11:00.691Z",
   "edition": "community-source",
   "files": [
     {
@@ -299,9 +299,14 @@
       "sha256": "a85844561845a7327db5403a14233c285ea4b68a4b93ee7476de422982448e5b"
     },
     {
+      "path": "src/main/pro-agent-manager.test.ts",
+      "size": 5711,
+      "sha256": "646c70b2e35c7406fac62f0bea02f325b117fa42c463e9bbd463fb2526cfee69"
+    },
+    {
       "path": "src/main/pro-agent-manager.ts",
-      "size": 14928,
-      "sha256": "a87240cdfb60b8fae52bca223fe265d2d738be54b19e4772c5272b6ec3d540be"
+      "size": 17026,
+      "sha256": "20be7546bb948426e5c2356fa8131861e959abbe87f6430fe6b77518c20d4bee"
     },
     {
       "path": "src/main/process-inspector.integration.test.ts",
@@ -445,13 +450,13 @@
     },
     {
       "path": "src/main/workspace-migration.test.ts",
-      "size": 8046,
-      "sha256": "58a4a4fab94ffcdf5b40e79e89456ad7c5ee8c74a2a41e72958f0f29cfc55d2c"
+      "size": 8855,
+      "sha256": "f8cd6b9a556b0a55e98a6bbf427232a9ec9e974c93858bc41d0ac8a00a7fc4c3"
     },
     {
       "path": "src/main/workspace-migration.ts",
-      "size": 24067,
-      "sha256": "063d9073ef559d1fb1a3f90637afb45facb26ae3dc56cb7889ab2574548ec958"
+      "size": 25027,
+      "sha256": "d75c11e26ee9d52c567c0847b42ffc3df2639a61cb17c13d1ae3594f45119b23"
     },
     {
       "path": "src/preload/index.ts",

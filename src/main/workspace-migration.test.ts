@@ -111,6 +111,21 @@ describe('WorkspaceMigrationManager', () => {
     await expect(readFile(join(dataRoot, 'linked.prism-migration'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it.skipIf(process.platform === 'win32')('rejects a symbolic-link migration source', async () => {
+    const source = await sourceFixture()
+    const output = await mkdtemp(join(tmpdir(), 'prism-migration-source-link-'))
+    roots.push(output)
+    const archive = join(output, 'all.prism-migration')
+    await new WorkspaceMigrationManager(source.profiles, source.extensions, '0.2.0').exportAll(archive, password)
+
+    const alias = join(output, 'alias.prism-migration')
+    await symlink(archive, alias)
+    const target = await repository('prism-migration-link-target-')
+    await expect(new WorkspaceMigrationManager(target.profiles, target.extensions, '0.2.0').importAll(alias, password, 'rename'))
+      .rejects.toThrow('迁移包文件无效')
+    expect(target.profiles.list()).toHaveLength(0)
+  })
+
   it('supports skip-on-name-conflict and rolls back profiles and extensions after a commit failure', async () => {
     const source = await sourceFixture()
     const output = await mkdtemp(join(tmpdir(), 'prism-migration-rollback-'))

@@ -109,15 +109,24 @@ async function *safeFiles(root: string, prefix: string): AsyncGenerator<{ source
     if (info.isDirectory()) {
       for (const entry of (await readdir(current)).sort()) yield *visit(join(current, entry), join(relative, entry))
     } else if (info.isFile()) {
-      yield { source: current, archivePath: join(prefix, relative).split(sep).join('/'), size: info.size }
+      if (!Number.isSafeInteger(info.size) || info.size < 0) throw new Error(`迁移文件大小无效：${relative || prefix}`)
+      const archivePath = join(prefix, relative).split(sep).join('/')
+      validatePortableArchivePath(archivePath)
+      yield { source: current, archivePath, size: info.size }
     }
   }
   yield *visit(root, '')
 }
 
-function safeArchivePath(root: string, value: string): string {
+function validatePortableArchivePath(value: string): void {
   if (typeof value !== 'string' || !value || value.includes('\\') || value.startsWith('/')
-    || value.split('/').some((part) => !part || part === '.' || part === '..')) throw new Error('迁移包包含不安全的文件路径')
+    || value.split('/').some((part) => !part || part === '.' || part === '..' || part.includes(':') || part.includes('\u0000'))) {
+    throw new Error('迁移包包含不安全的文件路径')
+  }
+}
+
+function safeArchivePath(root: string, value: string): string {
+  validatePortableArchivePath(value)
   const target = resolve(root, ...value.split('/'))
   const normalizedRoot = resolve(root)
   if (!target.startsWith(`${normalizedRoot}${sep}`)) throw new Error('迁移包文件路径越界')
@@ -313,7 +322,15 @@ export class WorkspaceMigrationManager {
         if (totalBytes > MAX_BYTES) throw new Error('迁移数据超过 500 GB')
         await writeRecordHeader(input, { type: 'file', path: file.archivePath, size: file.size })
         digest.update(file.archivePath).update('\0').update(String(file.size)).update('\0')
-        for await (const chunk of createReadStream(file.source)) { digest.update(chunk as Buffer); await writeChunk(input, chunk as Buffer) }
+        let actualSize = 0
+        for await (const chunk of createReadStream(file.source)) {
+          const data = chunk as Buffer
+          actualSize += data.length
+          if (actualSize > file.size || actualSize > MAX_BYTES) throw new Error(`迁移文件在读取期间发生变化：${file.archivePath}`)
+          digest.update(data)
+          await writeChunk(input, data)
+        }
+        if (actualSize !== file.size) throw new Error(`迁移文件在读取期间发生变化：${file.archivePath}`)
       }
       await writeRecordHeader(input, { type: 'end', fileCount, totalBytes, contentSha256: digest.digest('hex') })
       input.end()
@@ -331,8 +348,8 @@ export class WorkspaceMigrationManager {
     const password = validatePassword(passwordInput)
     if (conflictPolicy !== 'rename' && conflictPolicy !== 'skip') throw new Error('迁移冲突处理策略无效')
     const source = resolve(sourceInput)
-    const sourceInfo = await stat(source)
-    if (!sourceInfo.isFile() || sourceInfo.size < MAGIC.length + 4 + AUTH_TAG_BYTES) throw new Error('迁移包文件无效')
+    const sourceInfo = await lstat(source)
+    if (!sourceInfo.isFile() || sourceInfo.isSymbolicLink() || sourceInfo.size < MAGIC.length + 4 + AUTH_TAG_BYTES) throw new Error('迁移包文件无效')
     const handle = await open(source, 'r')
     let headerBytes: Buffer; let header: ArchiveHeader; let payloadOffset: number; let authTag: Buffer
     try {
@@ -362,6 +379,7 @@ export class WorkspaceMigrationManager {
     const reader = new DecryptedReader(createReadStream(source, { start: payloadOffset!, end: sourceInfo.size - AUTH_TAG_BYTES - 1 }).pipe(decipher))
     let manifest: ArchiveManifest; let fileCount = 0; let totalBytes = 0
     const digest = createHash('sha256')
+    const paths = new Set<string>()
     try {
       const first = await readRecordHeader(reader)
       if (first.type !== 'manifest' || !Number.isSafeInteger(first.size) || first.size! < 1 || first.size! > MAX_MANIFEST_BYTES) throw new Error('迁移包缺少有效清单')
@@ -375,7 +393,10 @@ export class WorkspaceMigrationManager {
           if (record.fileCount !== fileCount || record.totalBytes !== totalBytes || record.contentSha256 !== digest.digest('hex')) throw new Error('迁移包内容摘要不一致，文件可能已损坏')
           break
         }
-        if (record.type !== 'file' || typeof record.path !== 'string' || !Number.isSafeInteger(record.size) || record.size! < 0) throw new Error('迁移包文件记录无效')
+        if (record.type !== 'file' || typeof record.path !== 'string' || !Number.isSafeInteger(record.size)
+          || record.size! < 0 || record.size! > MAX_BYTES) throw new Error('迁移包文件记录无效')
+        if (paths.has(record.path)) throw new Error('迁移包包含重复的文件路径')
+        paths.add(record.path)
         fileCount += 1; totalBytes += record.size!
         if (fileCount > MAX_FILES || totalBytes > MAX_BYTES) throw new Error('迁移包内容超过安全限制')
         digest.update(record.path).update('\0').update(String(record.size)).update('\0')
