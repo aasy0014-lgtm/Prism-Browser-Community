@@ -7,6 +7,7 @@ import { locateBrowserForProfile } from './browser-locator'
 import type { ProfileStore } from './profile-store'
 import type { SettingsStore } from './settings-store'
 import { findManagedProcess, SystemProcessInspector, type ProcessInspector } from './process-inspector'
+import { closeProxyBridge, openProxyBridge } from './proxy-bridge'
 
 interface DevToolsPage {
   type: string
@@ -92,14 +93,20 @@ async function waitForPage(userDataPath: string): Promise<{ port: number; websoc
   throw new Error('启动 Cookie 维护会话超时')
 }
 
-async function stopChild(child: ChildProcess): Promise<void> {
+async function stopChild(child: ChildProcess, inspector?: ProcessInspector, userDataPath?: string): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return
   child.kill('SIGTERM')
   await Promise.race([
     new Promise<void>((resolve) => child.once('exit', () => resolve())),
     new Promise<void>((resolve) => setTimeout(resolve, 3000))
   ])
-  if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+  if (child.exitCode === null && child.signalCode === null) {
+    if (process.platform === 'win32' && child.pid && inspector && userDataPath) {
+      await inspector.terminate(child.pid, userDataPath).catch(() => undefined)
+    } else {
+      child.kill('SIGKILL')
+    }
+  }
 }
 
 export class CookieManager {
@@ -158,32 +165,51 @@ export class CookieManager {
       const userDataPath = this.profiles.profileDataPath(id)
       const activePort = join(userDataPath, 'DevToolsActivePort')
       await rm(activePort, { force: true })
-      const child = spawn(engine.executable, [
-        `--user-data-dir=${userDataPath}`,
-        '--headless=new',
-        '--disable-extensions',
-        '--remote-debugging-address=127.0.0.1',
-        '--remote-debugging-port=0',
-        '--no-first-run',
-        '--no-default-browser-check',
-        'about:blank'
-      ], { stdio: 'ignore', windowsHide: true, env: { ...process.env } })
-      let client: CdpClient | undefined
+      let localProxyUrl: string | undefined
       try {
-        const { websocket } = await waitForPage(userDataPath)
-        client = await CdpClient.connect(websocket)
-        await client.send('Network.enable')
-        return await action(client)
-      } finally {
-        if (client) {
-          await Promise.race([
-            client.send('Browser.close').catch(() => undefined),
-            new Promise((resolve) => setTimeout(resolve, 1000))
-          ])
-          client.close()
+        if (profile.proxy.protocol !== 'direct') {
+          localProxyUrl = await openProxyBridge(profile.proxy)
         }
-        await stopChild(child)
-        await rm(activePort, { force: true })
+        const args = [
+          `--user-data-dir=${userDataPath}`,
+          '--headless=new',
+          '--disable-extensions',
+          '--remote-debugging-address=127.0.0.1',
+          '--remote-debugging-port=0',
+          '--no-first-run',
+          '--no-default-browser-check',
+          '--disable-background-mode',
+          '--disable-background-networking',
+          '--disable-component-update'
+        ]
+        if (localProxyUrl) {
+          args.push('--disable-quic')
+          args.push('--dns-prefetch-disable')
+          args.push('--no-pings')
+          args.push(`--proxy-server=${localProxyUrl}`)
+          args.push('--proxy-bypass-list=localhost;127.0.0.1')
+        }
+        args.push('about:blank')
+        const child = spawn(engine.executable, args, { stdio: 'ignore', windowsHide: true, env: { ...process.env } })
+        let client: CdpClient | undefined
+        try {
+          const { websocket } = await waitForPage(userDataPath)
+          client = await CdpClient.connect(websocket)
+          await client.send('Network.enable')
+          return await action(client)
+        } finally {
+          if (client) {
+            await Promise.race([
+              client.send('Browser.close').catch(() => undefined),
+              new Promise((resolve) => setTimeout(resolve, 1000))
+            ])
+            client.close()
+          }
+          await stopChild(child, this.processInspector, userDataPath)
+          await rm(activePort, { force: true })
+        }
+      } finally {
+        await closeProxyBridge(localProxyUrl)
       }
     } finally {
       this.busyProfiles.delete(id)

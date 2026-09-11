@@ -69,4 +69,13 @@ describe('BrowserControlSession', () => {
       { targetId: 'target-2', flatten: true }
     ])
   })
+
+  it('rejects loopback, internal and cloud metadata URLs for MCP operations', async () => {
+    const cdp: CdpTransport = { send: vi.fn(), close: vi.fn() }
+    const session = new BrowserControlSession(cdp)
+
+    await expect(session.open('http://127.0.0.1:8080/')).rejects.toThrow('MCP 不允许访问本地或元数据服务地址')
+    await expect(session.open('http://localhost:3000/')).rejects.toThrow('MCP 不允许访问本地或元数据服务地址')
+    await expect(session.open('http://169.254.169.254/latest/meta-data/')).rejects.toThrow('MCP 不允许访问本地或元数据服务地址')
+  })
 })

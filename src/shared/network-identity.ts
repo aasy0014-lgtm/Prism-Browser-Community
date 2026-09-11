@@ -17,9 +17,12 @@ export interface NetworkIdentity {
 }
 
 const COUNTRY_LOCALES: Record<string, { language: string; acceptLanguages: string }> = {
+  AE: { language: 'ar-AE', acceptLanguages: 'ar-AE,ar,en-US,en' },
+  AT: { language: 'de-AT', acceptLanguages: 'de-AT,de,en-US,en' },
   AU: { language: 'en-AU', acceptLanguages: 'en-AU,en' },
   BR: { language: 'pt-BR', acceptLanguages: 'pt-BR,pt,en-US,en' },
   CA: { language: 'en-CA', acceptLanguages: 'en-CA,en-US,en' },
+  CH: { language: 'de-CH', acceptLanguages: 'de-CH,de,fr-CH,fr,en-US,en' },
   CN: { language: 'zh-CN', acceptLanguages: 'zh-CN,zh,en-US,en' },
   DE: { language: 'de-DE', acceptLanguages: 'de-DE,de,en-US,en' },
   ES: { language: 'es-ES', acceptLanguages: 'es-ES,es,en-US,en' },
@@ -27,6 +30,8 @@ const COUNTRY_LOCALES: Record<string, { language: string; acceptLanguages: strin
   GB: { language: 'en-GB', acceptLanguages: 'en-GB,en-US,en' },
   HK: { language: 'zh-HK', acceptLanguages: 'zh-HK,zh-TW,zh,en-US,en' },
   ID: { language: 'id-ID', acceptLanguages: 'id-ID,id,en-US,en' },
+  IE: { language: 'en-IE', acceptLanguages: 'en-IE,en-US,en' },
+  IL: { language: 'he-IL', acceptLanguages: 'he-IL,he,en-US,en' },
   IN: { language: 'en-IN', acceptLanguages: 'en-IN,en' },
   IT: { language: 'it-IT', acceptLanguages: 'it-IT,it,en-US,en' },
   JP: { language: 'ja-JP', acceptLanguages: 'ja-JP,ja,en-US,en' },
@@ -34,13 +39,20 @@ const COUNTRY_LOCALES: Record<string, { language: string; acceptLanguages: strin
   MX: { language: 'es-MX', acceptLanguages: 'es-MX,es,en-US,en' },
   MY: { language: 'ms-MY', acceptLanguages: 'ms-MY,ms,en-US,en' },
   NL: { language: 'nl-NL', acceptLanguages: 'nl-NL,nl,en-US,en' },
+  NZ: { language: 'en-NZ', acceptLanguages: 'en-NZ,en-US,en' },
   PH: { language: 'en-PH', acceptLanguages: 'en-PH,en-US,en' },
+  PL: { language: 'pl-PL', acceptLanguages: 'pl-PL,pl,en-US,en' },
+  RO: { language: 'ro-RO', acceptLanguages: 'ro-RO,ro,en-US,en' },
   RU: { language: 'ru-RU', acceptLanguages: 'ru-RU,ru,en-US,en' },
+  SE: { language: 'sv-SE', acceptLanguages: 'sv-SE,sv,en-US,en' },
   SG: { language: 'en-SG', acceptLanguages: 'en-SG,en-US,en' },
   TH: { language: 'th-TH', acceptLanguages: 'th-TH,th,en-US,en' },
+  TR: { language: 'tr-TR', acceptLanguages: 'tr-TR,tr,en-US,en' },
   TW: { language: 'zh-TW', acceptLanguages: 'zh-TW,zh,en-US,en' },
+  UA: { language: 'uk-UA', acceptLanguages: 'uk-UA,uk,ru,en-US,en' },
   US: { language: 'en-US', acceptLanguages: 'en-US,en' },
-  VN: { language: 'vi-VN', acceptLanguages: 'vi-VN,vi,en-US,en' }
+  VN: { language: 'vi-VN', acceptLanguages: 'vi-VN,vi,en-US,en' },
+  ZA: { language: 'en-ZA', acceptLanguages: 'en-ZA,en-GB,en' }
 }
 
 export function localeForCountry(countryCode: string | undefined): { language: string; acceptLanguages: string } | undefined {

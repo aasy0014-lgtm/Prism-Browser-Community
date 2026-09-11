@@ -332,8 +332,9 @@ export class ProfileStore {
   async duplicate(id: string): Promise<BrowserProfile> {
     const source = this.get(id)
     const seed = seedFromId(randomUUID())
+    const baseName = source.name.slice(0, 57)
     return this.create({
-      name: `${source.name} 副本`,
+      name: `${baseName} 副本`,
       note: source.note,
       group: source.group,
       tags: [...source.tags],

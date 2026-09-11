@@ -61,7 +61,10 @@ export function registerIpc({ profiles, settings, launcher, kernels, extensions,
   handle('profiles:list', () => profiles.list().map(publicProfile))
   handle('profiles:storage-health', () => profiles.storageHealth())
   handle('profiles:create', async (_event, draft: ProfileDraft) => publicProfile(await profiles.create(draft)))
-  handle('profiles:update', async (_event, id: string, draft: ProfileDraft) => publicProfile(await profiles.update(id, draft)))
+  handle('profiles:update', async (_event, id: string, draft: ProfileDraft) => {
+    if (launcher.isRunning(id)) throw new Error('请先关闭运行中的浏览器环境再修改配置')
+    return publicProfile(await profiles.update(id, draft))
+  })
   handle('profiles:duplicate', async (_event, id: string) => publicProfile(await profiles.duplicate(id)))
   handle('profiles:export-config', async (_event, id: string) => {
     const profile = profiles.get(id)

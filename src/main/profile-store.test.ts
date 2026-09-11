@@ -364,4 +364,13 @@ describe('ProfileStore', () => {
     expect(confirmed.proxyCheck?.exitChanged).toBe(false)
     expect(confirmed.proxyCheck?.previousIp).toBeUndefined()
   })
+
+  it('safely duplicates a profile whose name is near the 60 character limit without overflowing', async () => {
+    const repository = await store()
+    const longName = 'A'.repeat(60)
+    const profile = await repository.create({ ...defaultProfileDraft(), name: longName })
+    const copy = await repository.duplicate(profile.id)
+    expect(copy.name.length).toBeLessThanOrEqual(60)
+    expect(copy.name).toBe(`${'A'.repeat(57)} 副本`)
+  })
 })

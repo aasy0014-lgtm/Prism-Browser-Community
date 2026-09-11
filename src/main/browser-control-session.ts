@@ -135,6 +135,11 @@ function validateWebUrl(value: string): string {
   const url = new URL(value)
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('MCP 只允许打开 HTTP 或 HTTPS 网页')
   if (url.username || url.password) throw new Error('网址中不能包含账号或密码')
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.startsWith('127.')
+    || host === '169.254.169.254' || host === 'metadata.google.internal') {
+    throw new Error('MCP 不允许访问本地或元数据服务地址')
+  }
   return url.toString()
 }
 

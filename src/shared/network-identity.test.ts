@@ -6,6 +6,8 @@ describe('proxy-derived network identity', () => {
   it('maps common exit countries to realistic locale headers', () => {
     expect(localeForCountry('JP')).toEqual({ language: 'ja-JP', acceptLanguages: 'ja-JP,ja,en-US,en' })
     expect(localeForCountry('US')).toEqual({ language: 'en-US', acceptLanguages: 'en-US,en' })
+    expect(localeForCountry('SE')).toEqual({ language: 'sv-SE', acceptLanguages: 'sv-SE,sv,en-US,en' })
+    expect(localeForCountry('CH')).toEqual({ language: 'de-CH', acceptLanguages: 'de-CH,de,fr-CH,fr,en-US,en' })
   })
 
   it('uses verified proxy geography as one atomic identity', () => {

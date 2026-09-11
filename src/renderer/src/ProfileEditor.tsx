@@ -150,7 +150,8 @@ export function ProfileEditor({ open, profile, suggestedIndex, saving, extension
   async function submit(): Promise<void> {
     await form.validateFields()
     const values = form.getFieldsValue(true) as EditorValues
-    const color = typeof values.color === 'string' ? values.color : values.color.toHexString()
+    const rawColor = typeof values.color === 'string' ? values.color : values.color.toHexString()
+    const color = rawColor.startsWith('#') && rawColor.length > 7 ? rawColor.slice(0, 7) : rawColor
     await onSave({
       name: values.name,
       note: values.note,
@@ -172,7 +173,7 @@ export function ProfileEditor({ open, profile, suggestedIndex, saving, extension
         <Input placeholder="例如：美国店铺 01" maxLength={60} />
       </Form.Item>
       <Form.Item name="color" label="标记颜色">
-        <ColorPicker showText />
+        <ColorPicker showText disabledAlpha />
       </Form.Item>
       <Form.Item
         name="kernelVersion"

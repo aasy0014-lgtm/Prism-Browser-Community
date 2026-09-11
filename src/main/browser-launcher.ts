@@ -419,7 +419,11 @@ export class BrowserLauncher {
     running.process.kill('SIGTERM')
     const exited = await new Promise<boolean>((resolve) => {
       const forceTimer = setTimeout(() => {
-        running.process.kill('SIGKILL')
+        if (process.platform === 'win32' && running.process.pid) {
+          void this.processInspector.terminate(running.process.pid, this.profiles.profileDataPath(id)).catch(() => undefined)
+        } else {
+          running.process.kill('SIGKILL')
+        }
       }, 5000)
       const giveUpTimer = setTimeout(() => {
         clearTimeout(forceTimer)

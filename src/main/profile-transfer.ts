@@ -58,9 +58,10 @@ export function parseProfileConfig(raw: string): ProfileDraft {
     extensionIds: Array.isArray(candidate.extensionIds) ? candidate.extensionIds : [],
     kernelVersion: typeof candidate.kernelVersion === 'string' ? candidate.kernelVersion : ''
   })
+  const baseName = draft.name.slice(0, 56)
   return {
     ...draft,
-    name: `${draft.name}（导入）`,
+    name: `${baseName}（导入）`,
     proxy: { ...draft.proxy, password: '' }
   }
 }
