@@ -1,6 +1,7 @@
 import { createHash, createPublicKey, verify as verifySignature } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
-import { access, mkdir, readFile, rename, rm, stat } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { access, lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Readable, Transform } from 'node:stream'
@@ -23,6 +24,7 @@ interface UpdateConfig {
 
 const MAX_MANIFEST_BYTES = 256 * 1024
 const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024
+const READ_ONLY_NOFOLLOW = process.platform === 'win32' ? 'r' : constants.O_RDONLY | constants.O_NOFOLLOW
 
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value)
@@ -64,9 +66,34 @@ function validateArtifact(value: unknown): AppUpdateArtifact {
   return artifact as AppUpdateArtifact
 }
 
+async function hashStableFile(path: string, expectedSize: number): Promise<string> {
+  const initial = await lstat(path)
+  if (!initial.isFile() || initial.isSymbolicLink() || initial.size !== expectedSize) throw new Error('更新安装程序文件状态无效')
+  const handle = await open(path, READ_ONLY_NOFOLLOW)
+  try {
+    const opened = await handle.stat()
+    if (!opened.isFile() || opened.size !== expectedSize) throw new Error('更新安装程序文件状态无效')
+    const hash = createHash('sha256')
+    let size = 0
+    const stream = handle.createReadStream({ autoClose: false })
+    for await (const chunk of stream) {
+      const data = chunk as Buffer
+      size += data.length
+      if (size > expectedSize) throw new Error('更新安装程序文件大小发生变化')
+      hash.update(data)
+    }
+    const final = await handle.stat()
+    if (size !== expectedSize || !final.isFile() || final.size !== expectedSize) throw new Error('更新安装程序文件大小发生变化')
+    return hash.digest('hex')
+  } finally {
+    await handle.close().catch(() => undefined)
+  }
+}
+
 export class UpdateManager {
   private current: AppUpdateStatus
   private candidate: { manifest: AppUpdateManifest; artifact: AppUpdateArtifact } | null = null
+  private downloadInFlight: Promise<AppUpdateStatus> | null = null
 
   constructor(
     private readonly vaultPath: string,
@@ -166,6 +193,17 @@ export class UpdateManager {
   }
 
   async download(): Promise<AppUpdateStatus> {
+    if (this.downloadInFlight) return this.downloadInFlight
+    const operation = this.downloadInternal()
+    this.downloadInFlight = operation
+    try {
+      return await operation
+    } finally {
+      if (this.downloadInFlight === operation) this.downloadInFlight = null
+    }
+  }
+
+  private async downloadInternal(): Promise<AppUpdateStatus> {
     if (!this.candidate) await this.check()
     if (!this.candidate) return this.status()
     const { manifest, artifact } = this.candidate
@@ -213,11 +251,13 @@ export class UpdateManager {
       await pipeline(
         Readable.from(response.body as unknown as AsyncIterable<Uint8Array>),
         progress,
-        createWriteStream(temporary, { mode: 0o600 })
+        createWriteStream(temporary, { flags: 'wx', mode: 0o600 })
       )
       if (received !== artifact.size) throw new Error(`更新下载不完整：期望 ${artifact.size} 字节，实际 ${received} 字节`)
       const actual = digest.digest('hex')
       if (actual !== artifact.sha256.toLowerCase()) throw new Error('更新文件 SHA-256 与签名清单不一致')
+      const written = await lstat(temporary)
+      if (!written.isFile() || written.isSymbolicLink() || written.size !== artifact.size) throw new Error('更新安装程序文件状态无效')
       await rename(temporary, destination)
       this.setStatus({
         stage: 'ready',
@@ -253,9 +293,16 @@ export class UpdateManager {
     const root = resolve(this.vaultPath, 'downloads', 'app-updates')
     const target = resolve(path)
     if (!target.startsWith(`${root}${sep}`)) throw new Error('更新安装程序路径无效')
-    const info = await stat(target).catch(() => undefined)
     const artifact = this.candidate?.artifact
-    if (!info?.isFile() || !artifact || info.size !== artifact.size) {
+    let valid = Boolean(artifact)
+    let digest = ''
+    try {
+      if (artifact) digest = await hashStableFile(target, artifact.size)
+    } catch {
+      valid = false
+    }
+    if (!artifact || digest !== artifact.sha256.toLowerCase()) valid = false
+    if (!valid) {
       await rm(target, { force: true })
       this.setStatus({
         stage: 'error',
@@ -265,21 +312,7 @@ export class UpdateManager {
         latestVersion: this.current.latestVersion,
         message: '下载的安装程序不完整，已删除，请重新下载'
       })
-      throw new Error('更新安装程序已经不存在或大小发生变化')
-    }
-    const digest = createHash('sha256')
-    for await (const chunk of createReadStream(target)) digest.update(chunk as Buffer)
-    if (digest.digest('hex') !== artifact.sha256.toLowerCase()) {
-      await rm(target, { force: true })
-      this.setStatus({
-        stage: 'error',
-        currentVersion: this.currentVersion,
-        channel: this.current.channel,
-        distributionMode: this.current.distributionMode,
-        latestVersion: this.current.latestVersion,
-        message: '下载的安装程序已损坏，已删除，请重新下载'
-      })
-      throw new Error('更新安装程序在打开前校验失败')
+      throw new Error('更新安装程序已经不存在、大小变化或校验失败')
     }
     return target
   }

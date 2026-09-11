@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { readdir, stat } from 'node:fs/promises'
+import { lstat, readdir } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 export interface KernelCriticalFile {
@@ -49,8 +49,8 @@ function resolveSafeRelative(root: string, candidate: string): string | undefine
 
 async function isNonEmptyFile(path: string): Promise<boolean> {
   try {
-    const info = await stat(path)
-    return info.isFile() && info.size > 0
+    const info = await lstat(path)
+    return info.isFile() && !info.isSymbolicLink() && info.size > 0
   } catch {
     return false
   }
@@ -124,7 +124,8 @@ export async function collectKernelIntegrity(
   for (const path of paths) {
     const absolute = resolveSafeRelative(root, path)
     if (!absolute) throw new Error('内核关键文件路径越界')
-    const info = await stat(absolute)
+    const info = await lstat(absolute)
+    if (info.isSymbolicLink()) throw new Error('内核关键文件不能是符号链接')
     criticalFiles.push({ path, size: info.size, sha256: await hashFile(absolute) })
   }
   return { criticalFiles, criticalFilesSha256: aggregateCriticalFiles(criticalFiles) }
@@ -179,8 +180,8 @@ export async function verifyKernelIntegrity(
     const absolute = resolveSafeRelative(root, file.path)
     if (!absolute) return { status: 'corrupt', reason: `内核关键文件路径越界：${file.path}` }
     try {
-      const info = await stat(absolute)
-      if (!info.isFile() || info.size !== file.size) {
+      const info = await lstat(absolute)
+      if (!info.isFile() || info.isSymbolicLink() || info.size !== file.size) {
         return { status: 'corrupt', reason: `内核关键文件大小不一致：${file.path}` }
       }
       if (await hashFile(absolute) !== file.sha256.toLowerCase()) {

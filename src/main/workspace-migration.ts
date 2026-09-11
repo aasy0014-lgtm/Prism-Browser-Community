@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
+import { constants } from 'node:fs'
 import { appendFile, lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -22,6 +23,8 @@ const MAX_PROFILES = 500
 const SCRYPT_N = 32_768
 const SCRYPT_R = 8
 const SCRYPT_P = 1
+
+const READ_ONLY_NOFOLLOW = process.platform === 'win32' ? 'r' : constants.O_RDONLY | constants.O_NOFOLLOW
 
 interface ArchiveHeader {
   type: 'prism-workspace-migration'
@@ -100,6 +103,37 @@ async function writeRecordHeader(stream: PassThrough, metadata: RecordMetadata):
   length.writeUInt32BE(value.length)
   await writeChunk(stream, length)
   await writeChunk(stream, value)
+}
+
+async function copyStableFile(
+  source: string,
+  expectedSize: number,
+  archivePath: string,
+  onChunk: (chunk: Buffer) => Promise<void>
+): Promise<void> {
+  const initial = await lstat(source)
+  if (!initial.isFile() || initial.isSymbolicLink() || initial.size !== expectedSize) {
+    throw new Error(`迁移文件在读取期间发生变化：${archivePath}`)
+  }
+  const handle = await open(source, READ_ONLY_NOFOLLOW)
+  try {
+    const opened = await handle.stat()
+    if (!opened.isFile() || opened.size !== expectedSize) throw new Error(`迁移文件在读取期间发生变化：${archivePath}`)
+    let actualSize = 0
+    const stream = handle.createReadStream({ autoClose: false })
+    for await (const chunk of stream) {
+      const data = chunk as Buffer
+      actualSize += data.length
+      if (actualSize > expectedSize || actualSize > MAX_BYTES) throw new Error(`迁移文件在读取期间发生变化：${archivePath}`)
+      await onChunk(data)
+    }
+    const final = await handle.stat()
+    if (actualSize !== expectedSize || !final.isFile() || final.size !== expectedSize) {
+      throw new Error(`迁移文件在读取期间发生变化：${archivePath}`)
+    }
+  } finally {
+    await handle.close().catch(() => undefined)
+  }
 }
 
 async function *safeFiles(root: string, prefix: string): AsyncGenerator<{ source: string; archivePath: string; size: number }> {
@@ -322,15 +356,10 @@ export class WorkspaceMigrationManager {
         if (totalBytes > MAX_BYTES) throw new Error('迁移数据超过 500 GB')
         await writeRecordHeader(input, { type: 'file', path: file.archivePath, size: file.size })
         digest.update(file.archivePath).update('\0').update(String(file.size)).update('\0')
-        let actualSize = 0
-        for await (const chunk of createReadStream(file.source)) {
-          const data = chunk as Buffer
-          actualSize += data.length
-          if (actualSize > file.size || actualSize > MAX_BYTES) throw new Error(`迁移文件在读取期间发生变化：${file.archivePath}`)
+        await copyStableFile(file.source, file.size, file.archivePath, async (data) => {
           digest.update(data)
           await writeChunk(input, data)
-        }
-        if (actualSize !== file.size) throw new Error(`迁移文件在读取期间发生变化：${file.archivePath}`)
+        })
       }
       await writeRecordHeader(input, { type: 'end', fileCount, totalBytes, contentSha256: digest.digest('hex') })
       input.end()

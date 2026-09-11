@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { access, cp, lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { access, cp, lstat, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, join, resolve, sep } from 'node:path'
 import type { BrowserExtension } from '../shared/types'
 import type { Logger } from './app-logger'
@@ -46,13 +46,19 @@ export class ExtensionStore {
     for (const entry of await readdir(this.root, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name.startsWith('.')) continue
       try {
-        const metadata = JSON.parse(await readFile(join(this.root, entry.name, 'metadata.json'), 'utf8')) as BrowserExtension
+        const extensionRoot = join(this.root, entry.name)
+        const metadataPath = join(extensionRoot, 'metadata.json')
+        const extensionPath = join(extensionRoot, 'extension')
+        const metadataInfo = await lstat(metadataPath)
+        if (!metadataInfo.isFile() || metadataInfo.isSymbolicLink()) throw new Error('扩展元数据文件无效')
+        await inspectDirectory(extensionPath)
+        const metadata = JSON.parse(await readFile(metadataPath, 'utf8')) as BrowserExtension
         if (metadata.id !== entry.name || !/^[a-f\d-]{36}$/i.test(metadata.id)) throw new Error('扩展元数据 ID 无效')
-        await access(join(this.root, entry.name, 'extension', 'manifest.json'))
+        await access(join(extensionPath, 'manifest.json'))
         this.extensions.set(metadata.id, {
           ...metadata,
           globalEnabled: metadata.globalEnabled === true,
-          path: join(this.root, entry.name, 'extension')
+          path: extensionPath
         })
       } catch (error) {
         this.logger?.error('忽略不完整的本地扩展', { id: entry.name, error: error instanceof Error ? error.message : String(error) })
@@ -90,7 +96,9 @@ export class ExtensionStore {
     const manifestPath = join(source, 'manifest.json')
     let manifest: ChromeExtensionManifest
     try {
-      if ((await stat(manifestPath)).size > 1024 * 1024) throw new Error('扩展 manifest.json 不能超过 1 MB')
+      const manifestInfo = await lstat(manifestPath)
+      if (!manifestInfo.isFile() || manifestInfo.isSymbolicLink()) throw new Error('扩展 manifest.json 无效')
+      if (manifestInfo.size > 1024 * 1024) throw new Error('扩展 manifest.json 不能超过 1 MB')
       manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as ChromeExtensionManifest
     } catch (error) {
       if (error instanceof SyntaxError) throw new Error('扩展 manifest.json 不是有效 JSON')
@@ -109,7 +117,13 @@ export class ExtensionStore {
     const target = join(this.root, id)
     await mkdir(staging, { recursive: true })
     try {
-      await cp(source, join(staging, 'extension'), { recursive: true, errorOnExist: true })
+      await cp(source, join(staging, 'extension'), {
+        recursive: true,
+        errorOnExist: true,
+        dereference: false,
+        verbatimSymlinks: true
+      })
+      await inspectDirectory(join(staging, 'extension'))
       const extension: BrowserExtension = {
         id,
         name: manifest.name.startsWith('__MSG_') ? basename(source) : manifest.name.trim(),

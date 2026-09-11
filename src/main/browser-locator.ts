@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { access, readFile, readdir, stat } from 'node:fs/promises'
+import { access, lstat, readFile, readdir, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { basename, isAbsolute, join, resolve, sep } from 'node:path'
 import type { AppSettings, EngineStatus } from '../shared/types'
@@ -86,6 +86,7 @@ export async function locateBrowserForProfile(
   })
   let managedResult: EngineStatus
   try {
+    if ((await lstat(root)).isSymbolicLink()) throw new Error('内核目录是符号链接')
     const manifest = JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8')) as Partial<ManagedKernelManifest>
     if (manifest.version !== version || typeof manifest.executableRelative !== 'string' || !manifest.executableRelative) {
       managedResult = missing('清单无效')

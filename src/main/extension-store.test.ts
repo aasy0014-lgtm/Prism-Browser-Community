@@ -75,4 +75,19 @@ describe('ExtensionStore', () => {
 
     await expect(store.importDirectory(source)).rejects.toThrow('符号链接')
   })
+
+  it.skipIf(process.platform === 'win32')('ignores an installed extension whose payload later contains a symbolic link', async () => {
+    const { vault, source } = await fixture()
+    const external = await mkdtemp(join(tmpdir(), 'prism-extension-installed-external-'))
+    temporaryPaths.push(external)
+    await mkdir(join(external, 'data'))
+    const store = new ExtensionStore(vault)
+    await store.initialize()
+    const extension = await store.importDirectory(source)
+    await symlink(join(external, 'data'), join(extension.path, 'linked-data'))
+
+    const reloaded = new ExtensionStore(vault)
+    await reloaded.initialize()
+    expect(reloaded.list()).toEqual([])
+  })
 })

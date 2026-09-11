@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
-import { access, cp, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, statfs, writeFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { access, cp, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, stat, statfs, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Readable, Transform } from 'node:stream'
@@ -22,6 +23,7 @@ import { kernelRequiresPro } from '../shared/kernel-policy'
 
 const execFileAsync = promisify(execFile)
 const RELEASES_URL = 'https://api.github.com/repos/adryfish/fingerprint-chromium/releases?per_page=10'
+const READ_APPEND_NOFOLLOW = process.platform === 'win32' ? 'a' : constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW
 
 interface GithubAsset {
   name: string
@@ -57,6 +59,23 @@ interface KernelActivationBackup {
   settings: AppSettings
 }
 
+async function openDownloadWriter(path: string, append: boolean): Promise<{
+  stream: ReturnType<typeof createWriteStream>
+  close: () => Promise<void>
+}> {
+  if (!append) return { stream: createWriteStream(path, { flags: 'wx', mode: 0o600 }), close: async () => undefined }
+  const handle = await open(path, READ_APPEND_NOFOLLOW)
+  try {
+    return {
+      stream: createWriteStream(path, { fd: handle.fd, autoClose: false }),
+      close: async () => { await handle.close().catch(() => undefined) }
+    }
+  } catch (error) {
+    await handle.close().catch(() => undefined)
+    throw error
+  }
+}
+
 function supportedAsset(assets: GithubAsset[]): GithubAsset | undefined {
   if (process.platform === 'darwin') return assets.find((asset) => asset.name.endsWith('_macos.dmg'))
   if (process.platform === 'win32') return assets.find((asset) => asset.name.endsWith('_windows_x64.zip'))
@@ -88,6 +107,29 @@ async function findEntry(root: string, predicate: (name: string) => boolean, dep
     }
   }
   return undefined
+}
+
+function pathInside(root: string, candidate: string): boolean {
+  const path = relative(root, candidate)
+  return path === '' || (!isAbsolute(path) && path !== '..' && !path.startsWith(`..${sep}`))
+}
+
+async function assertNoExternalSymlinks(rootInput: string): Promise<void> {
+  const root = resolve(rootInput)
+  const rootInfo = await lstat(root)
+  if (rootInfo.isSymbolicLink()) throw new Error('内核目录不能是符号链接')
+  const canonicalRoot = resolve(await realpath(root))
+  const visit = async (current: string): Promise<void> => {
+    const info = await lstat(current)
+    if (info.isSymbolicLink()) {
+      const target = resolve(await realpath(current))
+      if (!pathInside(canonicalRoot, target)) throw new Error('内核目录不能包含指向外部的符号链接')
+      return
+    }
+    if (!info.isDirectory()) return
+    for (const entry of await readdir(current)) await visit(join(current, entry))
+  }
+  await visit(root)
 }
 
 export class KernelManager {
@@ -230,6 +272,7 @@ export class KernelManager {
       return locateBrowser(this.settings)
     } catch (error) {
       const cancelled = this.installAbort.signal.aborted
+      if (!cancelled) await rm(archivePath, { force: true }).catch(() => undefined)
       const message = cancelled ? '下载已取消，可稍后从断点继续' : error instanceof Error ? error.message : String(error)
       this.emit(release, cancelled ? 'cancelled' : 'error', 0, release.size, message)
       throw new Error(message)
@@ -278,11 +321,13 @@ export class KernelManager {
     const stagingPath = join(root, 'staging')
     await mkdir(stagingPath)
     try {
+      await assertNoExternalSymlinks(sourceRoot)
       if (process.platform === 'darwin') {
         await execFileAsync('ditto', [sourceRoot, join(stagingPath, 'Chromium.app')])
       } else {
-        await cp(sourceRoot, join(stagingPath, 'browser'), { recursive: true })
+        await cp(sourceRoot, join(stagingPath, 'browser'), { recursive: true, dereference: false, verbatimSymlinks: true })
       }
+      await assertNoExternalSymlinks(stagingPath)
       const importedExecutable = join(stagingPath, executableRelative)
       const info = await stat(importedExecutable)
       if (!info.isFile() || info.size <= 0) throw new Error('导入后的浏览器可执行文件无效')
@@ -468,14 +513,24 @@ export class KernelManager {
   }
 
   private async download(release: KernelRelease, destination: string, allowRangeReset = true): Promise<void> {
-    let existingBytes = await stat(destination).then((info) => info.size).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') return 0
-      throw error
-    })
+    let existingBytes = 0
+    try {
+      const info = await lstat(destination)
+      if (info.isSymbolicLink()) {
+        await rm(destination, { force: true })
+      } else if (!info.isFile()) {
+        throw new Error('内核下载目标不是普通文件')
+      } else {
+        existingBytes = info.size
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
     if (existingBytes > release.size) {
       await rm(destination, { force: true })
       existingBytes = 0
     }
+    if (existingBytes === 0) await rm(destination, { force: true })
     if (existingBytes === release.size) {
       const existingHash = createHash('sha256')
       for await (const chunk of createReadStream(destination)) existingHash.update(chunk as Buffer)
@@ -499,14 +554,18 @@ export class KernelManager {
       return this.download(release, destination, false)
     }
     if (!response.ok || !response.body) throw new Error(`内核下载失败（HTTP ${response.status}）`)
+    if (response.status === 206 && existingBytes === 0) throw new Error('内核下载服务器返回了无效的断点响应')
 
     let resumedBytes = 0
-    let writeFlags: 'a' | 'w' = 'w'
+    let append = false
     if (existingBytes > 0 && response.status === 206) {
-      const rangeStart = Number(response.headers.get('content-range')?.match(/^bytes (\d+)-/)?.[1])
-      if (rangeStart !== existingBytes) throw new Error('内核下载服务器返回了无效的断点范围')
+      const range = response.headers.get('content-range')?.match(/^bytes (\d+)-(\d+)\/(\d+)$/)
+      const rangeStart = Number(range?.[1]); const rangeEnd = Number(range?.[2]); const rangeTotal = Number(range?.[3])
+      if (!range || rangeStart !== existingBytes || rangeEnd < rangeStart || rangeTotal !== release.size) {
+        throw new Error('内核下载服务器返回了无效的断点范围')
+      }
       resumedBytes = existingBytes
-      writeFlags = 'a'
+      append = true
     }
 
     const hash = createHash('sha256')
@@ -518,6 +577,10 @@ export class KernelManager {
     const progress = new Transform({
       transform: (chunk: Buffer, _encoding, callback) => {
         received += chunk.length
+        if (received > release.size) {
+          callback(new Error('内核下载内容超过发行包声明的大小'))
+          return
+        }
         hash.update(chunk)
         const now = Date.now()
         if (now - lastReport > 200) {
@@ -529,7 +592,12 @@ export class KernelManager {
     })
     const source = Readable.from(response.body as unknown as AsyncIterable<Uint8Array>)
     this.emit(release, 'downloading', received, release.size, resumedBytes ? '正在从断点继续下载…' : '正在下载浏览器内核…')
-    await pipeline(source, progress, createWriteStream(destination, { flags: writeFlags, mode: 0o600 }))
+    const writer = await openDownloadWriter(destination, append)
+    try {
+      await pipeline(source, progress, writer.stream)
+    } finally {
+      await writer.close()
+    }
     if (received !== release.size) throw new Error(`内核下载不完整：期望 ${release.size} 字节，实际 ${received} 字节`)
     this.emit(release, 'verifying', received, release.size, '正在校验 SHA-256…')
     const actual = hash.digest('hex')
@@ -559,6 +627,7 @@ export class KernelManager {
     try {
       await execFileAsync('hdiutil', ['attach', archivePath, '-nobrowse', '-readonly', '-mountpoint', mountPath])
       mounted = true
+      await assertNoExternalSymlinks(mountPath)
       const appBundle = await findEntry(mountPath, (name) => name.endsWith('.app'), 2)
       if (!appBundle) throw new Error('DMG 中没有找到 Chromium.app')
       const targetApp = join(stagingPath, 'Chromium.app')
@@ -583,6 +652,7 @@ export class KernelManager {
     try {
       const command = `Expand-Archive -LiteralPath '${archivePath.replaceAll("'", "''")}' -DestinationPath '${extracted.replaceAll("'", "''")}' -Force`
       await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command])
+      await assertNoExternalSymlinks(extracted)
       const chrome = await findEntry(extracted, (name) => name.toLowerCase() === 'chrome.exe')
       if (!chrome) throw new Error('ZIP 中没有找到 chrome.exe')
       const browserPath = join(stagingPath, 'browser')
@@ -708,14 +778,16 @@ export class KernelManager {
 
   private async readManifest(version: string): Promise<InstalledKernelManifest | undefined> {
     try {
-      const manifest = JSON.parse(await readFile(join(this.kernelPath(version), 'manifest.json'), 'utf8')) as InstalledKernelManifest
+      const root = this.kernelPath(version)
+      if ((await lstat(root)).isSymbolicLink()) throw new Error('内核目录是符号链接')
+      const manifest = JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8')) as InstalledKernelManifest
       if (manifest.version !== version || typeof manifest.assetName !== 'string' || !/^[a-f\d]{64}$/i.test(manifest.sha256)
         || typeof manifest.installedAt !== 'string' || typeof manifest.executableRelative !== 'string') {
         throw new Error('内核清单字段无效')
       }
-      const root = resolve(this.kernelPath(version))
-      const executable = resolve(root, manifest.executableRelative)
-      if (isAbsolute(manifest.executableRelative) || (executable !== root && !executable.startsWith(`${root}${sep}`))) {
+      const normalizedRoot = resolve(root)
+      const executable = resolve(normalizedRoot, manifest.executableRelative)
+      if (isAbsolute(manifest.executableRelative) || (executable !== normalizedRoot && !executable.startsWith(`${normalizedRoot}${sep}`))) {
         throw new Error('内核清单中的可执行文件路径越界')
       }
       if (manifest.executableSha256 !== undefined && !/^[a-f\d]{64}$/i.test(manifest.executableSha256)) {
