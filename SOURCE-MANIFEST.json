@@ -1,8 +1,13 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-12T00:29:10.879Z",
+  "generatedAt": "2026-09-12T01:28:39.404Z",
   "edition": "community-source",
   "files": [
+    {
+      "path": ".github/workflows/publish-desktop-builds.yml",
+      "size": 3077,
+      "sha256": "37da9c401e5d610b8495c8021d2070469c9ea5f6ade45908b089c6d7c2e890f7"
+    },
     {
       "path": ".gitignore",
       "size": 82,

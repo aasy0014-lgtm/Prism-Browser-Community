@@ -1,0 +1,109 @@
+name: Publish desktop builds
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    name: Build macOS arm64
+    runs-on: macos-14
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build macOS packages
+        run: npm run dist:mac
+      - name: Upload macOS packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-macos-arm64
+          if-no-files-found: error
+          path: |
+            release/*.dmg
+            release/*.zip
+          retention-days: 14
+
+  windows:
+    name: Build Windows x64
+    runs-on: windows-2022
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build Windows packages
+        run: npm run dist:win
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows-x64
+          if-no-files-found: error
+          path: |
+            release/*.msi
+            release/*.exe
+            release/*.zip
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub release
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: release
+          merge-multiple: true
+      - name: Generate checksums and release notes
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          find release -maxdepth 1 -type f -print -exec sha256sum {} \;
+          sha256sum release/* > release/SHA256SUMS.txt
+          {
+            echo "Desktop prerelease ${RELEASE_TAG}"
+            echo
+            echo "Built from commit ${COMMIT_SHA}."
+            echo
+            echo "Included packages:"
+            echo "- macOS arm64: DMG and ZIP"
+            echo "- Windows x64: MSI, portable EXE, and ZIP"
+            echo "- SHA256SUMS.txt: SHA-256 checksums"
+            echo
+            echo "This build is unsigned and does not bundle a browser kernel. Complete platform signing, notarization, and native acceptance before production distribution."
+          } > release-notes.md
+      - name: Create prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" release/* \
+            --verify-tag \
+            --prerelease \
+            --title "Desktop build ${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md
