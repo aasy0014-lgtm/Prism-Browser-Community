@@ -27,7 +27,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Build macOS packages
-        run: npm run dist:mac
+        run: |
+          npm run build
+          npx electron-builder --mac dmg zip --arm64 --publish never
       - name: Upload macOS packages
         uses: actions/upload-artifact@v4
         with:
@@ -52,7 +54,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Build Windows packages
-        run: npm run dist:win
+        run: |
+          npm run build
+          npx electron-builder --win msi portable zip --x64 --publish never
       - name: Upload Windows packages
         uses: actions/upload-artifact@v4
         with:
