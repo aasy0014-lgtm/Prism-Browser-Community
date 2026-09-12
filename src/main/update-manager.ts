@@ -1,7 +1,6 @@
 import { createHash, createPublicKey, verify as verifySignature } from 'node:crypto'
-import { createReadStream, createWriteStream } from 'node:fs'
 import { constants } from 'node:fs'
-import { access, lstat, mkdir, open, rename, rm } from 'node:fs/promises'
+import { access, lstat, open, rename, rm } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Readable, Transform } from 'node:stream'
@@ -13,7 +12,7 @@ import type {
   UpdateDistributionMode
 } from '../shared/types'
 import type { Logger } from './app-logger'
-import { readStableText } from './atomic-file'
+import { ensurePrivateDirectory, openPrivateExclusiveStream, readStableText } from './atomic-file'
 
 interface UpdateConfig {
   schemaVersion: 1
@@ -73,7 +72,9 @@ async function hashStableFile(path: string, expectedSize: number): Promise<strin
   const handle = await open(path, READ_ONLY_NOFOLLOW)
   try {
     const opened = await handle.stat()
-    if (!opened.isFile() || opened.size !== expectedSize) throw new Error('更新安装程序文件状态无效')
+    if (!opened.isFile() || opened.size !== expectedSize || opened.dev !== initial.dev || opened.ino !== initial.ino) {
+      throw new Error('更新安装程序文件状态无效')
+    }
     const hash = createHash('sha256')
     let size = 0
     const stream = handle.createReadStream({ autoClose: false })
@@ -84,7 +85,8 @@ async function hashStableFile(path: string, expectedSize: number): Promise<strin
       hash.update(data)
     }
     const final = await handle.stat()
-    if (size !== expectedSize || !final.isFile() || final.size !== expectedSize) throw new Error('更新安装程序文件大小发生变化')
+    if (size !== expectedSize || !final.isFile() || final.size !== expectedSize
+      || final.dev !== initial.dev || final.ino !== initial.ino) throw new Error('更新安装程序文件大小发生变化')
     return hash.digest('hex')
   } finally {
     await handle.close().catch(() => undefined)
@@ -209,11 +211,12 @@ export class UpdateManager {
     if (!this.candidate) return this.status()
     const { manifest, artifact } = this.candidate
     const downloads = join(this.vaultPath, 'downloads', 'app-updates')
-    await mkdir(downloads, { recursive: true })
+    await ensurePrivateDirectory(downloads)
     const extension = artifact.kind
     const destination = join(downloads, `Prism-Browser-${manifest.version}-${process.platform}-${process.arch}.${extension}`)
     const temporary = `${destination}.download`
     await rm(temporary, { force: true })
+    let writer: Awaited<ReturnType<typeof openPrivateExclusiveStream>> | undefined
     try {
       const response = await fetch(artifact.url, {
         headers: { accept: 'application/octet-stream', 'user-agent': `Prism-Browser/${this.currentVersion}` },
@@ -249,11 +252,13 @@ export class UpdateManager {
           callback(null, chunk)
         }
       })
+      writer = await openPrivateExclusiveStream(temporary)
       await pipeline(
         Readable.from(response.body as unknown as AsyncIterable<Uint8Array>),
         progress,
-        createWriteStream(temporary, { flags: 'wx', mode: 0o600 })
+        writer.stream
       )
+      await writer.close()
       if (received !== artifact.size) throw new Error(`更新下载不完整：期望 ${artifact.size} 字节，实际 ${received} 字节`)
       const actual = digest.digest('hex')
       if (actual !== artifact.sha256.toLowerCase()) throw new Error('更新文件 SHA-256 与签名清单不一致')
@@ -274,6 +279,7 @@ export class UpdateManager {
       })
       return this.status()
     } catch (error) {
+      await writer?.close().catch(() => undefined)
       await rm(temporary, { force: true })
       this.logger?.error('下载应用更新失败', error)
       this.setStatus({

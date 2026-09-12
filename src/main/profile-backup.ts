@@ -1,7 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual, type Hash } from 'node:crypto'
-import { createWriteStream } from 'node:fs'
-import { constants } from 'node:fs'
-import { lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { constants, type WriteStream } from 'node:fs'
+import { lstat, mkdtemp, open, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -10,7 +9,7 @@ import type { BrowserProfile, ProfileBackupResult, ProfileDraft } from '../share
 import { validateProfileDraft } from '../shared/validation'
 import type { Logger } from './app-logger'
 import type { ProfileStore } from './profile-store'
-import { appendPrivateBuffer, openPrivateAppendStream } from './atomic-file'
+import { appendPrivateBuffer, ensurePrivateDirectory, openPrivateAppendStream, openPrivateExclusiveStream } from './atomic-file'
 
 const MAGIC = Buffer.concat([Buffer.from('PRISM-PROFILE-BACKUP'), Buffer.from([1])])
 const AUTH_TAG_BYTES = 16
@@ -91,7 +90,12 @@ async function *safeFiles(root: string): AsyncGenerator<{ source: string; archiv
     // Chromium may leave ephemeral singleton links in the profile root. Never follow them.
     if (info.isSymbolicLink()) return
     if (info.isDirectory()) {
-      for (const entry of (await readdir(current)).sort()) {
+      const entries = await readdir(current)
+      const afterRead = await lstat(current)
+      if (!afterRead.isDirectory() || afterRead.isSymbolicLink() || afterRead.dev !== info.dev || afterRead.ino !== info.ino) {
+        throw new Error(`备份目录在读取期间发生变化：${currentRelative || 'user-data'}`)
+      }
+      for (const entry of entries.sort()) {
         yield *visit(join(current, entry), join(currentRelative, entry))
       }
       return
@@ -196,6 +200,31 @@ async function readExactAt(handle: Awaited<ReturnType<typeof open>>, buffer: Buf
   }
 }
 
+function writeOutputChunk(stream: WriteStream, chunk: Buffer): Promise<void> {
+  return new Promise((resolvePromise, reject) => {
+    stream.write(chunk, (error?: Error | null) => {
+      if (error) reject(error)
+      else resolvePromise()
+    })
+  })
+}
+
+function finishOutput(stream: WriteStream): Promise<void> {
+  return new Promise((resolvePromise, reject) => {
+    const onError = (error: Error): void => {
+      stream.off('finish', onFinish)
+      reject(error)
+    }
+    const onFinish = (): void => {
+      stream.off('error', onError)
+      resolvePromise()
+    }
+    stream.once('error', onError)
+    stream.once('finish', onFinish)
+    stream.end()
+  })
+}
+
 class DecryptedReader {
   private readonly iterator: AsyncIterator<Buffer | string>
   private buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0)
@@ -218,8 +247,8 @@ class DecryptedReader {
   }
 
   async copyExactly(size: number, target: string, digest: Hash): Promise<void> {
-    await mkdir(dirname(target), { recursive: true })
-    const output = createWriteStream(target, { flags: 'wx', mode: 0o600 })
+    await ensurePrivateDirectory(dirname(target))
+    const output = await openPrivateExclusiveStream(target)
     let remaining = size
     try {
       while (remaining > 0) {
@@ -233,12 +262,13 @@ class DecryptedReader {
         this.buffer = this.buffer.subarray(length)
         digest.update(chunk)
         remaining -= length
-        if (!output.write(chunk)) await once(output, 'drain')
+        await writeOutputChunk(output.stream, chunk)
       }
-      output.end()
-      await once(output, 'finish')
+      await finishOutput(output.stream)
+      await output.close()
     } catch (error) {
-      output.destroy()
+      output.stream.destroy()
+      await output.close().catch(() => undefined)
       await rm(target, { force: true })
       throw error
     }
@@ -286,6 +316,7 @@ export class ProfileBackupManager {
     const destination = resolve(destinationInput)
     const parentInfo = await stat(dirname(destination))
     if (!parentInfo.isDirectory()) throw new Error('备份目标目录无效')
+    await ensurePrivateDirectory(dirname(destination))
     await assertTargetOutsideSource(source, destination)
     try {
       await stat(destination)
@@ -404,7 +435,7 @@ export class ProfileBackupManager {
 
       const stagingRoot = await mkdtemp(join(this.profiles.vaultPath, '.profile-backup-import-'))
       const staging = join(stagingRoot, 'user-data')
-      await mkdir(staging, { recursive: true })
+      await ensurePrivateDirectory(staging)
       const decipher = createDecipheriv('aes-256-gcm', key, nonce)
       decipher.setAAD(headerBytes!)
       decipher.setAuthTag(authTag!)

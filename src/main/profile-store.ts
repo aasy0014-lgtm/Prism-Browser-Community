@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { lstat, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { lstat, readdir, rename, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { BrowserProfile, DeletedProfileSummary, ProfileBatchClassification, ProfileDraft, ProfileStoreHealth, ProxyCheckSummary, WebRtcPolicy } from '../shared/types'
 import { defaultProfileWindow, seedFromId } from '../shared/defaults'
@@ -8,7 +8,7 @@ import { validateProfileDraft } from '../shared/validation'
 import { identitySecretCodec, type SecretCodec } from './secret-codec'
 import { privateProxyConfig, sameProxyIdentity } from './profile-secrets'
 import { safePathSize } from './profile-data'
-import { copyTextAtomic, readStableText, writeAtomicJson } from './atomic-file'
+import { copyTextAtomic, ensurePrivateDirectory, readStableText, writeAtomicJson } from './atomic-file'
 
 interface StoreFile {
   schemaVersion: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11
@@ -37,6 +37,10 @@ const MAX_PROFILE_SERIAL = 999_999_999
 
 function validProfileSerial(value: unknown): value is number {
   return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= MAX_PROFILE_SERIAL
+}
+
+function assertProfileId(id: string): void {
+  if (typeof id !== 'string' || !/^[a-zA-Z0-9-]{1,100}$/.test(id)) throw new Error('环境 ID 无效')
 }
 
 function safeWebRtcPolicy(value: unknown): WebRtcPolicy {
@@ -105,7 +109,7 @@ export class ProfileStore {
   }
 
   async initialize(): Promise<void> {
-    await mkdir(this.vaultPath, { recursive: true })
+    await ensurePrivateDirectory(this.vaultPath)
     let loaded: LoadedStore | undefined
     let primaryError: unknown
     try {
@@ -400,7 +404,7 @@ export class ProfileStore {
     await this.assertProfileDataIdentity(id)
     const source = join(this.vaultPath, 'profiles', id)
     const recycle = join(this.vaultPath, 'recycle-bin', 'profiles')
-    await mkdir(recycle, { recursive: true })
+    await ensurePrivateDirectory(recycle)
     const deletedAt = new Date().toISOString()
     const record: DeletedProfileRecord = {
       schemaVersion: 1,
@@ -414,12 +418,12 @@ export class ProfileStore {
     }
     const marker = join(source, 'deleted-profile.json')
     await writeAtomicJson(marker, record)
-    const trashId = `${id}-${Date.now()}`
+    const trashId = `${id}-${Date.now()}-${randomUUID()}`
     try {
       await rename(source, join(recycle, trashId))
     } catch (error) {
       await rm(marker, { force: true })
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      throw error
     }
     this.profiles.delete(id)
     await this.persist()
@@ -427,7 +431,7 @@ export class ProfileStore {
 
   async listTrash(): Promise<DeletedProfileSummary[]> {
     const root = join(this.vaultPath, 'recycle-bin', 'profiles')
-    await mkdir(root, { recursive: true })
+    await ensurePrivateDirectory(root)
     const result: DeletedProfileSummary[] = []
     for (const entry of await readdir(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
@@ -455,7 +459,7 @@ export class ProfileStore {
   async usesExtension(id: string): Promise<boolean> {
     if (this.list().some((profile) => profile.extensionIds.includes(id))) return true
     const root = join(this.vaultPath, 'recycle-bin', 'profiles')
-    await mkdir(root, { recursive: true })
+    await ensurePrivateDirectory(root)
     for (const entry of await readdir(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
       try {
@@ -471,7 +475,7 @@ export class ProfileStore {
   async kernelUsers(version: string): Promise<string[]> {
     const names = this.list().filter((profile) => profile.kernelVersion === version).map((profile) => profile.name)
     const root = join(this.vaultPath, 'recycle-bin', 'profiles')
-    await mkdir(root, { recursive: true })
+    await ensurePrivateDirectory(root)
     for (const entry of await readdir(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
       try {
@@ -486,7 +490,14 @@ export class ProfileStore {
 
   async purgeTrash(trashId: string): Promise<void> {
     if (!/^[a-zA-Z0-9-]+$/.test(trashId)) throw new Error('回收站条目标识无效')
-    const target = join(this.vaultPath, 'recycle-bin', 'profiles', trashId)
+    const root = join(this.vaultPath, 'recycle-bin', 'profiles')
+    await ensurePrivateDirectory(root)
+    const target = join(root, trashId)
+    const targetInfo = await lstat(target).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+      throw error
+    })
+    if (!targetInfo || !targetInfo.isDirectory() || targetInfo.isSymbolicLink()) throw new Error('回收站条目目录无效')
     let record: DeletedProfileRecord
     try {
       record = JSON.parse(await readStableText(join(target, 'deleted-profile.json'), 1024 * 1024)) as DeletedProfileRecord
@@ -508,7 +519,7 @@ export class ProfileStore {
     if (days !== 7 && days !== 30 && days !== 90) throw new Error('回收站保留天数无效')
     const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
     const root = join(this.vaultPath, 'recycle-bin', 'profiles')
-    await mkdir(root, { recursive: true })
+    await ensurePrivateDirectory(root)
     const expired: string[] = []
     for (const entry of await readdir(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
@@ -525,7 +536,15 @@ export class ProfileStore {
 
   async restore(trashId: string): Promise<BrowserProfile> {
     if (!/^[a-zA-Z0-9-]+$/.test(trashId)) throw new Error('回收站条目标识无效')
-    const source = join(this.vaultPath, 'recycle-bin', 'profiles', trashId)
+    const recycleRoot = join(this.vaultPath, 'recycle-bin', 'profiles')
+    await ensurePrivateDirectory(recycleRoot)
+    const source = join(recycleRoot, trashId)
+    const sourceInfo = await lstat(source).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+      throw error
+    })
+    if (!sourceInfo) throw new Error('回收站中的环境数据不完整')
+    if (!sourceInfo.isDirectory() || sourceInfo.isSymbolicLink()) throw new Error('回收站环境目录无效')
     let record: DeletedProfileRecord
     try {
       record = JSON.parse(await readStableText(join(source, 'deleted-profile.json'), 1024 * 1024)) as DeletedProfileRecord
@@ -537,7 +556,7 @@ export class ProfileStore {
     if (record.schemaVersion !== 1 || !stored || typeof stored.id !== 'string'
       || !/^[a-zA-Z0-9-]{1,100}$/.test(stored.id)
       || !trashId.startsWith(`${stored.id}-`)
-      || !/^\d+$/.test(trashId.slice(stored.id.length + 1))
+      || !/^\d+(?:-[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12})?$/i.test(trashId.slice(stored.id.length + 1))
       || typeof record.deletedAt !== 'string' || !Number.isFinite(Date.parse(record.deletedAt))
       || typeof stored.createdAt !== 'string' || !Number.isFinite(Date.parse(stored.createdAt))
       || stored.lastOpenedAt !== undefined
@@ -588,7 +607,14 @@ export class ProfileStore {
     }
     if (profile.serialNumber >= this.nextSerialNumber) this.nextSerialNumber = profile.serialNumber + 1
     if (this.nextSerialNumber > MAX_PROFILE_SERIAL) throw new Error('环境编号空间已用尽')
-    const target = join(this.vaultPath, 'profiles', profile.id)
+    const profilesRoot = join(this.vaultPath, 'profiles')
+    await ensurePrivateDirectory(profilesRoot)
+    const target = join(profilesRoot, profile.id)
+    const targetInfo = await lstat(target).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+      throw error
+    })
+    if (targetInfo) throw new Error('相同 ID 的环境目录已经存在，无法恢复')
     await rename(source, target)
     try {
       await this.ensureProfileDirectories(profile.id)
@@ -647,14 +673,17 @@ export class ProfileStore {
   }
 
   profileDataPath(id: string): string {
+    assertProfileId(id)
     return join(this.vaultPath, 'profiles', id, 'user-data')
   }
 
   profileRuntimePath(id: string): string {
+    assertProfileId(id)
     return join(this.vaultPath, 'profiles', id, 'runtime')
   }
 
   profileOwnerPath(id: string): string {
+    assertProfileId(id)
     return join(this.vaultPath, 'profiles', id, PROFILE_OWNER_FILE)
   }
 
@@ -694,18 +723,22 @@ export class ProfileStore {
   }
 
   private async ensureProfileDirectories(id: string): Promise<void> {
+    assertProfileId(id)
+    await ensurePrivateDirectory(join(this.vaultPath, 'profiles'))
     const root = join(this.vaultPath, 'profiles', id)
-    await mkdir(root, { recursive: true })
+    await ensurePrivateDirectory(root)
     try {
-      await writeFile(this.profileOwnerPath(id), JSON.stringify({
+      const markerInfo = await lstat(this.profileOwnerPath(id))
+      if (!markerInfo.isFile() || markerInfo.isSymbolicLink()) throw new Error('环境身份标记文件无效')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      await writeAtomicJson(this.profileOwnerPath(id), {
         schemaVersion: 1,
         profileId: id
-      } satisfies ProfileOwnerMarker, null, 2), { encoding: 'utf8', mode: 0o600, flag: 'wx' })
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      } satisfies ProfileOwnerMarker)
     }
-    await mkdir(this.profileDataPath(id), { recursive: true })
-    await mkdir(this.profileRuntimePath(id), { recursive: true })
+    await ensurePrivateDirectory(this.profileDataPath(id))
+    await ensurePrivateDirectory(this.profileRuntimePath(id))
     await this.verifyProfileDataIdentity(id)
   }
 
@@ -719,7 +752,7 @@ export class ProfileStore {
       }))
     }
     const operation = this.writeQueue.catch(() => undefined).then(async () => {
-      await mkdir(dirname(this.profilesPath), { recursive: true })
+      await ensurePrivateDirectory(dirname(this.profilesPath))
       await writeAtomicJson(this.profilesPath, data)
       try {
         if (!this.preservePreviousBackupOnce) {

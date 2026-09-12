@@ -1,7 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto'
-import { createWriteStream } from 'node:fs'
-import { constants } from 'node:fs'
-import { lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { constants, type WriteStream } from 'node:fs'
+import { lstat, mkdtemp, open, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -11,7 +10,7 @@ import { validateProfileDraft } from '../shared/validation'
 import type { Logger } from './app-logger'
 import type { ExtensionStore } from './extension-store'
 import type { ProfileStore } from './profile-store'
-import { appendPrivateBuffer, openPrivateAppendStream } from './atomic-file'
+import { appendPrivateBuffer, ensurePrivateDirectory, openPrivateAppendStream, openPrivateExclusiveStream } from './atomic-file'
 
 const MAGIC = Buffer.concat([Buffer.from('PRISM-MIGRATION'), Buffer.from([1])])
 const AUTH_TAG_BYTES = 16
@@ -80,6 +79,31 @@ async function readExactAt(handle: Awaited<ReturnType<typeof open>>, buffer: Buf
   }
 }
 
+function writeOutputChunk(stream: WriteStream, chunk: Buffer): Promise<void> {
+  return new Promise((resolvePromise, reject) => {
+    stream.write(chunk, (error?: Error | null) => {
+      if (error) reject(error)
+      else resolvePromise()
+    })
+  })
+}
+
+function finishOutput(stream: WriteStream): Promise<void> {
+  return new Promise((resolvePromise, reject) => {
+    const onError = (error: Error): void => {
+      stream.off('finish', onFinish)
+      reject(error)
+    }
+    const onFinish = (): void => {
+      stream.off('error', onError)
+      resolvePromise()
+    }
+    stream.once('error', onError)
+    stream.once('finish', onFinish)
+    stream.end()
+  })
+}
+
 function portableProfile(profile: BrowserProfile): MigrationProfile {
   return {
     sourceId: profile.id,
@@ -145,7 +169,12 @@ async function *safeFiles(root: string, prefix: string): AsyncGenerator<{ source
     const info = await lstat(current)
     if (info.isSymbolicLink()) throw new Error(`迁移数据包含符号链接：${relative || prefix}`)
     if (info.isDirectory()) {
-      for (const entry of (await readdir(current)).sort()) yield *visit(join(current, entry), join(relative, entry))
+      const entries = await readdir(current)
+      const afterRead = await lstat(current)
+      if (!afterRead.isDirectory() || afterRead.isSymbolicLink() || afterRead.dev !== info.dev || afterRead.ino !== info.ino) {
+        throw new Error(`迁移目录在读取期间发生变化：${relative || prefix}`)
+      }
+      for (const entry of entries.sort()) yield *visit(join(current, entry), join(relative, entry))
     } else if (info.isFile()) {
       if (!Number.isSafeInteger(info.size) || info.size < 0) throw new Error(`迁移文件大小无效：${relative || prefix}`)
       const archivePath = join(prefix, relative).split(sep).join('/')
@@ -191,8 +220,8 @@ class DecryptedReader {
   }
 
   async copyExactly(size: number, target: string, digest: ReturnType<typeof createHash>): Promise<void> {
-    await mkdir(dirname(target), { recursive: true })
-    const output = createWriteStream(target, { flags: 'wx', mode: 0o600 })
+    await ensurePrivateDirectory(dirname(target))
+    const output = await openPrivateExclusiveStream(target)
     let remaining = size
     try {
       while (remaining > 0) {
@@ -206,12 +235,13 @@ class DecryptedReader {
         this.buffer = this.buffer.subarray(length)
         digest.update(chunk)
         remaining -= length
-        if (!output.write(chunk)) await once(output, 'drain')
+        await writeOutputChunk(output.stream, chunk)
       }
-      output.end()
-      await once(output, 'finish')
+      await finishOutput(output.stream)
+      await output.close()
     } catch (error) {
-      output.destroy()
+      output.stream.destroy()
+      await output.close().catch(() => undefined)
       await rm(target, { force: true })
       throw error
     }
@@ -336,7 +366,7 @@ export class WorkspaceMigrationManager {
     const roots = profiles.map((profile) => ({ root: this.profiles.profileDataPath(profile.id), prefix: `profiles/${profile.id}/user-data` }))
     for (const id of referencedExtensionIds) roots.push({ root: extensionMap.get(id)!.path, prefix: `extensions/${id}` })
     await assertExportTargetsOutsideSources([destination, staging], roots.map((root) => root.root))
-    await mkdir(dirname(destination), { recursive: true })
+    await ensurePrivateDirectory(dirname(destination))
     try {
       await stat(destination)
       throw new Error('目标迁移包已经存在')
@@ -420,6 +450,7 @@ export class WorkspaceMigrationManager {
       const key = await deriveKey(password, salt)
       if (!timingSafeEqual(keyCheck(key), expectedCheck)) { key.fill(0); throw new Error('迁移密码错误') }
       staging = await mkdtemp(join(this.profiles.vaultPath, '.migration-import-'))
+      await ensurePrivateDirectory(staging)
       const decipher = createDecipheriv('aes-256-gcm', key, nonce)
       decipher.setAAD(headerBytes!); decipher.setAuthTag(authTag!)
       const payload = handle.createReadStream({ start: payloadOffset!, end: sourceInfo.size - AUTH_TAG_BYTES - 1, autoClose: false })
@@ -481,7 +512,7 @@ export class WorkspaceMigrationManager {
       for (let index = 0; index < createdProfiles.length; index++) {
         const profile = createdProfiles[index]
         const stagedData = join(staging, 'profiles', selected[index].sourceId, 'user-data')
-        await mkdir(stagedData, { recursive: true })
+        await ensurePrivateDirectory(stagedData)
         const target = this.profiles.profileDataPath(profile.id); const empty = `${target}.empty-${randomUUID()}`
         await rename(target, empty)
         try { await rename(stagedData, target); await rm(empty, { recursive: true, force: true }) }

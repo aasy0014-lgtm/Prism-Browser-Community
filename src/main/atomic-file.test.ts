@@ -1,8 +1,8 @@
-import { lstat, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { appendPrivateText, copyTextAtomic, readStableText, writeAtomicJson } from './atomic-file'
+import { appendPrivateText, copyTextAtomic, ensurePrivateDirectory, readStableText, writeAtomicJson } from './atomic-file'
 
 const roots: string[] = []
 
@@ -75,5 +75,17 @@ describe('atomic file writes', () => {
 
     await expect(appendPrivateText(path, 'must not leak')).rejects.toThrow()
     await expect(readFile(secret, 'utf8')).resolves.toBe('unchanged')
+  })
+
+  it.skipIf(process.platform === 'win32')('does not create files below a symlinked private directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'prism-atomic-directory-link-'))
+    roots.push(root)
+    const external = join(root, 'external')
+    const redirected = join(root, 'redirected')
+    await mkdir(external)
+    await symlink(external, redirected)
+
+    await expect(ensurePrivateDirectory(join(redirected, 'nested'))).rejects.toThrow('私有目录结构无效')
+    await expect(lstat(join(external, 'nested'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })

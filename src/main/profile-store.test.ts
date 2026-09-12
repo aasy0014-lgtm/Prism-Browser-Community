@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -46,6 +46,38 @@ describe('ProfileStore', () => {
     await expect(repository.assertProfileDataIdentity(first.id)).rejects.toThrow('环境 ID 不匹配')
     await expect(repository.remove(first.id)).rejects.toThrow('环境 ID 不匹配')
     expect(repository.list()).toHaveLength(2)
+  })
+
+  it('rejects a profile-root symlink before creating identity files in its target', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'prism-browser-symlink-root-'))
+    const external = await mkdtemp(join(tmpdir(), 'prism-browser-external-'))
+    temporaryPaths.push(path, external)
+    const draft = defaultProfileDraft()
+    await writeFile(join(path, 'profiles.json'), JSON.stringify({
+      schemaVersion: 11,
+      nextSerialNumber: 2,
+      profiles: [{
+        ...draft,
+        id: 'known-profile',
+        serialNumber: 1,
+        createdAt: '2026-08-01T00:00:00.000Z',
+        updatedAt: '2026-08-01T00:00:00.000Z',
+        status: 'closed'
+      }]
+    }))
+    await mkdir(join(path, 'profiles'))
+    await symlink(external, join(path, 'profiles', 'known-profile'), process.platform === 'win32' ? 'junction' : 'dir')
+
+    await expect(new ProfileStore(path).initialize()).rejects.toThrow('私有目录结构无效')
+    await expect(readdir(external)).resolves.toEqual([])
+  })
+
+  it('does not allow profile path helpers to escape the vault', () => {
+    const repository = new ProfileStore('/tmp/profile-vault')
+
+    expect(() => repository.profileDataPath('../outside')).toThrow('环境 ID 无效')
+    expect(() => repository.profileRuntimePath('a/b')).toThrow('环境 ID 无效')
+    expect(() => repository.profileOwnerPath('')).toThrow('环境 ID 无效')
   })
 
   it('duplicates metadata with a new id and fingerprint seed', async () => {

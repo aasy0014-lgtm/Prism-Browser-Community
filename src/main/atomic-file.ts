@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { createWriteStream, type WriteStream } from 'node:fs'
-import { lstat, open, rename, rm } from 'node:fs/promises'
+import { dirname, resolve } from 'node:path'
+import { lstat, mkdir, open, rename, rm } from 'node:fs/promises'
 
 const READ_ONLY_NOFOLLOW = process.platform === 'win32' ? 'r' : constants.O_RDONLY | constants.O_NOFOLLOW
 const APPEND_NOFOLLOW = process.platform === 'win32'
@@ -27,6 +28,45 @@ function fileIdentity(value: { dev: number; ino: number }): PrivateFileIdentity 
 
 function sameFileIdentity(first: PrivateFileIdentity, second: PrivateFileIdentity): boolean {
   return first.dev === second.dev && first.ino === second.ino
+}
+
+/**
+ * Create or validate a private directory one component at a time.
+ *
+ * `mkdir(..., { recursive: true })` follows an existing symlink in any
+ * parent component.  These directories hold profile state and temporary
+ * extraction output, so following one would redirect writes outside the
+ * intended vault.  Walking from the nearest existing ancestor also lets us
+ * reject a pre-existing symlink before creating children beneath it.
+ */
+export async function ensurePrivateDirectory(path: string): Promise<void> {
+  const absolute = resolve(path)
+  const missing: string[] = []
+  let current = absolute
+
+  while (true) {
+    try {
+      const info = await lstat(current)
+      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('私有目录结构无效')
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      const parent = dirname(current)
+      if (parent === current) throw error
+      missing.push(current)
+      current = parent
+    }
+  }
+
+  for (const directory of missing.reverse()) {
+    try {
+      await mkdir(directory, { mode: 0o700 })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    }
+    const info = await lstat(directory)
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('私有目录结构无效')
+  }
 }
 
 async function readStableHandleText(

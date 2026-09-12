@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-11T14:27:24.989Z",
+  "generatedAt": "2026-09-12T00:29:10.879Z",
   "edition": "community-source",
   "files": [
     {
@@ -155,13 +155,13 @@
     },
     {
       "path": "src/main/atomic-file.test.ts",
-      "size": 3223,
-      "sha256": "998d6bc4983e6afe7ba2218d84a70ce9e823dd491cbaa09b21c52da1ff9cb673"
+      "size": 3841,
+      "sha256": "becc5bf5319fe96c46f96c88ccae856c136ae5ef7f9171edc6d3d2f74f60afaf"
     },
     {
       "path": "src/main/atomic-file.ts",
-      "size": 8614,
-      "sha256": "f771a8b4ace6dcace89cfd83bf308a8d9cb40a40c098db117529cbe9074f79ea"
+      "size": 10041,
+      "sha256": "ec376dc8b894b86b5ecbb5edb889ff7d4e4d09b8274b9e4a1ae50f78b9c5b66d"
     },
     {
       "path": "src/main/automation-audit.ts",
@@ -180,13 +180,13 @@
     },
     {
       "path": "src/main/browser-launcher.test.ts",
-      "size": 21029,
-      "sha256": "1eae86950f70018cfb182b2380edf4039c8b3ffc567ab40d289ee47376cf8dfe"
+      "size": 22921,
+      "sha256": "a8c81ad792832bcba980c2fa9b5e966413bc1f0903aaaa743072f62fc1c666d5"
     },
     {
       "path": "src/main/browser-launcher.ts",
-      "size": 42826,
-      "sha256": "92275b52f3f2e4860692c9b145c1cde3c27a4b4ddcf43ad15d4a32d029c6a566"
+      "size": 46892,
+      "sha256": "b18d8f600be3d4e9a26171d3805135b0977d240b3969b28258ba885980b240d1"
     },
     {
       "path": "src/main/browser-locator.ts",
@@ -350,8 +350,8 @@
     },
     {
       "path": "src/main/profile-backup.ts",
-      "size": 22499,
-      "sha256": "2be8d8d3806685dc7c8d667ff33cbb5ca58d2693202bfb73426779d3e95b5dc4"
+      "size": 23593,
+      "sha256": "352f90c5cf6cc088d55103e86de2663ea491dd90b9c288f908a11d02526dfbd3"
     },
     {
       "path": "src/main/profile-batch-csv.ts",
@@ -380,13 +380,13 @@
     },
     {
       "path": "src/main/profile-store.test.ts",
-      "size": 18518,
-      "sha256": "cc7b5d9a1870eaa15a7c638bf119e8b9b78196a14ca9d0a859b5ca3483531aaf"
+      "size": 19924,
+      "sha256": "dc63cc515075dbbfe98a6a411c9ac666f9e95edb08ec4898e113afddc07bce97"
     },
     {
       "path": "src/main/profile-store.ts",
-      "size": 32979,
-      "sha256": "1d5bc7efa9601a1fedde249291a6eaf9112b0796157a84166121ef83cc657fde"
+      "size": 34546,
+      "sha256": "7db4638a339c48db40886f5d5a2fadd15ebc595c7164fadd472b3559c6f45721"
     },
     {
       "path": "src/main/profile-transfer.test.ts",
@@ -470,13 +470,13 @@
     },
     {
       "path": "src/main/update-manager.test.ts",
-      "size": 3871,
-      "sha256": "9d9e6e816408dbb283964039aa3e3ffe82d6d4fd61ff7625169ec8dc04423a61"
+      "size": 4798,
+      "sha256": "cf8ae7f9ce0c55c03aced6039909bf32227f1b281d1662e2b8541100d5667d00"
     },
     {
       "path": "src/main/update-manager.ts",
-      "size": 15255,
-      "sha256": "bd6f8901433f07eda0c26ee8db2f72e76e2ea6b55305ba1486c5f7c917ccd021"
+      "size": 15547,
+      "sha256": "6b9c5d2bf5133cb8763fc4e217b7398a2221b8d989ab7ad3ea80fcf342bf173e"
     },
     {
       "path": "src/main/workspace-migration.test.ts",
@@ -485,8 +485,8 @@
     },
     {
       "path": "src/main/workspace-migration.ts",
-      "size": 27219,
-      "sha256": "2864f865bc42717406ddf5d1808f1364b8a8eeafeecdfc7b9155dfc912d7937c"
+      "size": 28286,
+      "sha256": "0205d7563459a2a1b15a4a70d873ad44576449508ba80e7baee1183b3332b8b6"
     },
     {
       "path": "src/preload/index.ts",

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -270,6 +270,29 @@ describe('BrowserLauncher orphan recovery', () => {
     expect(reopened.get(profile.id).lastError).toContain('未正常结束')
   })
 
+  it('keeps an untrusted process marker for diagnostics instead of deleting it', async () => {
+    const vault = await mkdtemp(join(tmpdir(), 'prism-launcher-'))
+    temporaryPaths.push(vault)
+    const profiles = new ProfileStore(vault)
+    const settings = new SettingsStore(vault)
+    const extensions = new ExtensionStore(vault)
+    await Promise.all([profiles.initialize(), settings.initialize(), extensions.initialize()])
+    const profile = await profiles.create(defaultProfileDraft())
+    const marker = join(profiles.profileRuntimePath(profile.id), 'process.json')
+    await writeFile(marker, JSON.stringify({
+      schemaVersion: 1,
+      profileId: profile.id,
+      pid: 9999,
+      userDataDir: join(vault, 'different-profile')
+    }))
+    const launcher = new BrowserLauncher(profiles, settings, () => undefined, extensions, undefined, new FakeProcessInspector([]))
+
+    await launcher.initialize()
+
+    expect(profiles.get(profile.id).status).toBe('error')
+    await expect(readFile(marker, 'utf8')).resolves.toContain('different-profile')
+  })
+
   it('moves transient profiles to a recoverable error state when process scanning fails', async () => {
     const vault = await mkdtemp(join(tmpdir(), 'prism-launcher-'))
     temporaryPaths.push(vault)
@@ -402,6 +425,28 @@ describe('BrowserLauncher concurrent lifecycle', () => {
     ])
     expect(launcher.runtimeSnapshot().managedProcesses).toBe(0)
     expect(launcher.hasRunning()).toBe(false)
+  })
+
+  it('preserves a replacement process marker during exit cleanup', async () => {
+    const { profiles, launcher, controller, ids } = await launchFixture(1)
+    const launch = launcher.launch(ids[0])
+    await waitUntil(() => controller.children.length === 1)
+    controller.startPending()
+    await launch
+
+    const replacement = join(profiles.profileRuntimePath(ids[0]), 'process.json')
+    await writeFile(replacement, JSON.stringify({
+      schemaVersion: 1,
+      profileId: ids[0],
+      pid: controller.children[0].pid + 1,
+      executable: process.execPath,
+      userDataDir: profiles.profileDataPath(ids[0]),
+      startedAt: new Date().toISOString()
+    }))
+
+    await launcher.close(ids[0])
+
+    await expect(readFile(replacement, 'utf8')).resolves.toContain(`"pid":${controller.children[0].pid + 1}`)
   })
 
   it('retains only the latest 20 browser crash records per profile', async () => {

@@ -1,6 +1,6 @@
 import { generateKeyPairSync, createHash, sign } from 'node:crypto'
 import { Readable } from 'node:stream'
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -81,5 +81,21 @@ describe('UpdateManager download hardening', () => {
     await expect(manager.downloadedPath()).rejects.toThrow('校验失败')
     await expect(readFile(external, 'utf8')).resolves.toBe('external-secret')
     await expect(readFile(installer)).rejects.toThrow()
+  })
+
+  it.skipIf(process.platform === 'win32')('does not download through a symlinked update directory', async () => {
+    const item = await fixture()
+    const downloads = join(item.root, 'downloads')
+    const external = join(item.root, 'external-downloads')
+    await mkdir(downloads)
+    await mkdir(external)
+    await symlink(external, join(downloads, 'app-updates'))
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.includes('manifest')
+      ? { ok: true, status: 200, headers: new Headers(), text: async () => JSON.stringify(item.manifest) }
+      : { ok: true, status: 200, headers: new Headers(), body: Readable.from([item.payload]) }))
+    const manager = new UpdateManager(item.root, '0.0.1', '/tmp', () => undefined, undefined, item.configPath)
+
+    await expect(manager.download()).rejects.toThrow('私有目录结构无效')
+    await expect(readdir(external)).resolves.toEqual([])
   })
 })

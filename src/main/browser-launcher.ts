@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { access, mkdir, rm, statfs } from 'node:fs/promises'
+import { access, lstat, mkdir, rm, statfs } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { join } from 'node:path'
 import type { BrowserCrashRecord, BrowserProfile, LaunchDiagnosticCheck, LaunchDiagnosticReport, ProfileLaunchOptions, ProxyConfig, ProxyTestResult } from '../shared/types'
@@ -41,6 +41,17 @@ interface RunningBrowser {
   finalize: (status: 'closed' | 'error', lastError?: string) => Promise<void>
 }
 
+interface ProcessMarker {
+  schemaVersion?: 1
+  profileId?: string
+  pid: number
+  executable?: string
+  userDataDir: string
+  startedAt?: string
+}
+
+type ProcessMarkerState = 'missing' | 'valid' | 'invalid'
+
 export interface LauncherRuntimeSnapshot {
   managedProcesses: number
   orphanProcesses: number
@@ -56,6 +67,54 @@ export type { BrowserCrashRecord } from '../shared/types'
 const MAX_PROFILE_CRASH_RECORDS = 20
 const MAX_CLOSE_ALL_ROUNDS = 4
 const MAX_STAGNANT_CLOSE_ALL_ROUNDS = 2
+
+function validProcessMarker(value: unknown, profileId: string, userDataDir: string, expectedPid?: number): value is ProcessMarker {
+  if (!value || typeof value !== 'object') return false
+  const marker = value as Partial<ProcessMarker>
+  return (marker.schemaVersion === undefined || marker.schemaVersion === 1)
+    && (marker.profileId === undefined || marker.profileId === profileId)
+    && Number.isSafeInteger(marker.pid) && marker.pid! > 0
+    && (expectedPid === undefined || marker.pid === expectedPid)
+    && typeof marker.userDataDir === 'string' && marker.userDataDir === userDataDir
+    && (marker.executable === undefined || typeof marker.executable === 'string')
+    && (marker.startedAt === undefined || typeof marker.startedAt === 'string' && Number.isFinite(Date.parse(marker.startedAt)))
+}
+
+async function processMarkerState(path: string, profileId: string, userDataDir: string): Promise<ProcessMarkerState> {
+  try {
+    const raw = await readStableText(path, 256 * 1024)
+    let value: unknown
+    try { value = JSON.parse(raw) } catch { return 'invalid' }
+    return validProcessMarker(value, profileId, userDataDir) ? 'valid' : 'invalid'
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'invalid'
+  }
+}
+
+async function removeOwnedProcessMarker(path: string, profileId: string, userDataDir: string, expectedPid?: number): Promise<'removed' | 'missing' | 'preserved'> {
+  let initial
+  try {
+    initial = await lstat(path)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing'
+    return 'preserved'
+  }
+  if (!initial.isFile() || initial.isSymbolicLink()) return 'preserved'
+  let raw: string
+  try { raw = await readStableText(path, 256 * 1024) } catch { return 'preserved' }
+  let value: unknown
+  try { value = JSON.parse(raw) } catch { return 'preserved' }
+  if (!validProcessMarker(value, profileId, userDataDir, expectedPid)) return 'preserved'
+  let current
+  try { current = await lstat(path) } catch { return 'preserved' }
+  if (!current.isFile() || current.isSymbolicLink() || current.dev !== initial.dev || current.ino !== initial.ino) return 'preserved'
+  try {
+    await rm(path, { force: true })
+    return 'removed'
+  } catch {
+    return 'preserved'
+  }
+}
 
 function validCrashHistory(value: unknown): BrowserCrashRecord[] {
   if (!Array.isArray(value)) return []
@@ -109,19 +168,42 @@ export class BrowserLauncher {
     } catch (error) {
       this.logger?.error('启动时无法扫描 Chromium 遗留进程', error)
       await Promise.allSettled(this.profiles.list().map(async (profile) => {
-          const processMarker = join(this.profiles.profileRuntimePath(profile.id), 'process.json')
-          const hadProcessMarker = await access(processMarker).then(() => true).catch(() => false)
-          if (!hadProcessMarker && (profile.status === 'closed' || profile.status === 'error')) return
+        try {
+          await this.profiles.assertProfileDataIdentity(profile.id)
+        } catch (identityError) {
           const next = await this.profiles.setRuntime(profile.id, {
             status: 'error',
-            lastError: '应用重启后无法扫描系统进程，请先执行启动诊断再重新打开环境'
+            lastError: identityError instanceof Error ? identityError.message : String(identityError)
           })
           this.onChanged(next)
-        }))
+          return
+        }
+        const processMarker = join(this.profiles.profileRuntimePath(profile.id), 'process.json')
+        const markerState = await processMarkerState(processMarker, profile.id, this.profiles.profileDataPath(profile.id))
+        if (markerState === 'missing' && (profile.status === 'closed' || profile.status === 'error')) return
+        const next = await this.profiles.setRuntime(profile.id, {
+          status: 'error',
+          lastError: markerState === 'invalid'
+            ? '应用重启后无法扫描系统进程，且遗留进程标记无效；请先执行启动诊断再重新打开环境'
+            : '应用重启后无法扫描系统进程，请先执行启动诊断再重新打开环境'
+        })
+        this.onChanged(next)
+      }))
       return
     }
     for (const profile of this.profiles.list()) {
-      const process = findManagedProcess(systemProcesses, this.profiles.profileDataPath(profile.id))
+      try {
+        await this.profiles.assertProfileDataIdentity(profile.id)
+      } catch (identityError) {
+        const next = await this.profiles.setRuntime(profile.id, {
+          status: 'error',
+          lastError: identityError instanceof Error ? identityError.message : String(identityError)
+        })
+        this.onChanged(next)
+        continue
+      }
+      const userDataDir = this.profiles.profileDataPath(profile.id)
+      const process = findManagedProcess(systemProcesses, userDataDir)
       if (process) {
         this.orphanProcesses.set(profile.id, process.pid)
         await this.profiles.setRuntime(profile.id, {
@@ -131,12 +213,14 @@ export class BrowserLauncher {
         this.logger?.error('检测到遗留浏览器进程', { profileId: profile.id, pid: process.pid })
       } else {
         const processMarker = join(this.profiles.profileRuntimePath(profile.id), 'process.json')
-        const hadProcessMarker = await access(processMarker).then(() => true).catch(() => false)
-        await rm(processMarker, { force: true })
-        if (hadProcessMarker || (profile.status !== 'closed' && profile.status !== 'error')) {
+        const markerState = await processMarkerState(processMarker, profile.id, userDataDir)
+        if (markerState === 'valid') await removeOwnedProcessMarker(processMarker, profile.id, userDataDir)
+        if (markerState !== 'missing' || (profile.status !== 'closed' && profile.status !== 'error')) {
           const next = await this.profiles.setRuntime(profile.id, {
             status: 'error',
-            lastError: '上次运行未正常结束，但当前未发现占用数据目录的浏览器进程'
+            lastError: markerState === 'invalid'
+              ? '上次运行的进程标记无效，且当前未发现占用数据目录的浏览器进程'
+              : '上次运行未正常结束，但当前未发现占用数据目录的浏览器进程'
           })
           this.onChanged(next)
           this.logger?.error('浏览器环境状态已从异常中断中恢复', { profileId: profile.id })
@@ -208,6 +292,7 @@ export class BrowserLauncher {
       })
       const runtimePath = this.profiles.profileRuntimePath(id)
       await mkdir(runtimePath, { recursive: true })
+      await this.profiles.assertProfileDataIdentity(id)
       const args = buildLaunchArgs(profile, {
         userDataDir: this.profiles.profileDataPath(id),
         proxyUrl: localProxyUrl,
@@ -269,7 +354,7 @@ export class BrowserLauncher {
         try {
           const cleanup = await Promise.allSettled([
             closeProxyBridge(localProxyUrl),
-            rm(join(runtimePath, 'process.json'), { force: true })
+            removeOwnedProcessMarker(join(runtimePath, 'process.json'), id, this.profiles.profileDataPath(id), child.pid)
           ])
           for (const result of cleanup) {
             if (result.status === 'rejected') {
@@ -311,6 +396,8 @@ export class BrowserLauncher {
           try {
             this.logger?.info('浏览器环境已启动', { profileId: id, pid: child.pid })
             await writeAtomicJson(join(runtimePath, 'process.json'), {
+              schemaVersion: 1,
+              profileId: id,
               pid: child.pid,
               executable: engine.executable,
               userDataDir: this.profiles.profileDataPath(id),
@@ -563,6 +650,7 @@ export class BrowserLauncher {
 
   async crashHistory(id: string): Promise<BrowserCrashRecord[]> {
     this.profiles.get(id)
+    await this.profiles.assertProfileDataIdentity(id)
     try {
       return validCrashHistory(JSON.parse(await readStableText(
         join(this.profiles.profileRuntimePath(id), 'crash-history.json'),
@@ -727,6 +815,7 @@ export class BrowserLauncher {
   }
 
   private async recordCrash(id: string, record: BrowserCrashRecord): Promise<void> {
+    await this.profiles.assertProfileDataIdentity(id)
     const path = join(this.profiles.profileRuntimePath(id), 'crash-history.json')
     const history = [...await this.crashHistory(id), record].slice(-MAX_PROFILE_CRASH_RECORDS)
     await writeAtomicJson(path, history)
@@ -895,7 +984,12 @@ export class BrowserLauncher {
     try {
       await this.processInspector.terminate(pid, this.profiles.profileDataPath(id))
       this.orphanProcesses.delete(id)
-      await rm(join(this.profiles.profileRuntimePath(id), 'process.json'), { force: true })
+      await removeOwnedProcessMarker(
+        join(this.profiles.profileRuntimePath(id), 'process.json'),
+        id,
+        this.profiles.profileDataPath(id),
+        pid
+      )
       const profile = await this.profiles.setRuntime(id, { status: 'closed', lastError: undefined })
       this.onChanged(profile)
       this.logger?.info('遗留浏览器进程已结束', { profileId: id, pid })
