@@ -89,8 +89,20 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          find release -maxdepth 1 -type f -print -exec sha256sum {} \;
-          sha256sum release/* > release/SHA256SUMS.txt
+          # GitHub normalizes spaces in release asset names to dots. Normalize
+          # the downloaded files first so SHA256SUMS.txt matches the links.
+          for file in release/*; do
+            [ -f "$file" ] || continue
+            base="${file##*/}"
+            normalized="${base// /.}"
+            if [ "$base" != "$normalized" ]; then
+              mv -- "$file" "release/$normalized"
+            fi
+          done
+          (
+            cd release
+            sha256sum -- * > SHA256SUMS.txt
+          )
           {
             echo "Desktop prerelease ${RELEASE_TAG}"
             echo
